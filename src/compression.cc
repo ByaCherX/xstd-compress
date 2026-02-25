@@ -1,0 +1,102 @@
+#include "compression.h"
+
+#include <stdexcept>
+#include <string>
+
+#include <zstd.h>
+
+namespace xstd {
+
+// ---------------------------------------------------------------------------
+// ZstdCompressor
+// ---------------------------------------------------------------------------
+
+static int ToZstdLevel(CompressionLevel lvl) noexcept {
+    switch (lvl) {
+        case CompressionLevel::FAST:    return 1;
+        case CompressionLevel::DEFAULT: return ZSTD_defaultCLevel();
+        case CompressionLevel::BEST:    return ZSTD_maxCLevel();
+        default:                        return ZSTD_defaultCLevel();
+    }
+}
+
+ZstdCompressor::ZstdCompressor(CompressionLevel level)
+    : level_(ToZstdLevel(level)) {}
+
+int ZstdCompressor::ZstdLevel(CompressionLevel lvl) noexcept {
+    return ToZstdLevel(lvl);
+}
+
+void ZstdCompressor::Compress(std::span<const uint8_t> input,
+                               std::vector<uint8_t>&    output) const {
+    const std::size_t bound = ZSTD_compressBound(input.size());
+    output.resize(bound);
+
+    const std::size_t result = ZSTD_compress(
+        output.data(), output.size(),
+        input.data(), input.size(),
+        level_);
+
+    if (ZSTD_isError(result))
+        throw std::runtime_error(
+            std::string("ZSTD compress error: ") + ZSTD_getErrorName(result));
+
+    output.resize(result);
+}
+
+void ZstdCompressor::Decompress(std::span<const uint8_t> input,
+                                 std::vector<uint8_t>&    output,
+                                 int32_t                  uncompressed_size) const {
+    if (uncompressed_size > 0) {
+        output.resize(static_cast<std::size_t>(uncompressed_size));
+        const std::size_t result = ZSTD_decompress(
+            output.data(), output.size(),
+            input.data(), input.size());
+        if (ZSTD_isError(result))
+            throw std::runtime_error(
+                std::string("ZSTD decompress error: ") + ZSTD_getErrorName(result));
+        output.resize(result);
+    } else {
+        // Unknown size — use streaming decompress.
+        ZSTD_DStream* stream = ZSTD_createDStream();
+        if (!stream) throw std::runtime_error("ZSTD_createDStream failed");
+
+        ZSTD_initDStream(stream);
+        output.clear();
+
+        ZSTD_inBuffer  in_buf  {input.data(), input.size(), 0};
+        std::vector<uint8_t> chunk(ZSTD_DStreamOutSize());
+        ZSTD_outBuffer out_buf {chunk.data(), chunk.size(), 0};
+
+        std::size_t ret = 0;
+        do {
+            out_buf.pos = 0;
+            ret = ZSTD_decompressStream(stream, &out_buf, &in_buf);
+            if (ZSTD_isError(ret)) {
+                ZSTD_freeDStream(stream);
+                throw std::runtime_error(
+                    std::string("ZSTD decompress error: ") + ZSTD_getErrorName(ret));
+            }
+            output.insert(output.end(), chunk.begin(), chunk.begin() + out_buf.pos);
+        } while (ret != 0 && in_buf.pos < in_buf.size);
+
+        ZSTD_freeDStream(stream);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CompressorFactory
+// ---------------------------------------------------------------------------
+
+std::unique_ptr<ICompressor> CompressorFactory::Create(CompressionCodec codec) {
+    switch (codec.Type()) {
+        case CompressionType::UNCOMPRESSED:
+            return std::make_unique<NoopCompressor>();
+        case CompressionType::ZSTD:
+            return std::make_unique<ZstdCompressor>(codec.Level());
+        default:
+            throw std::runtime_error("Unsupported compression type");
+    }
+}
+
+} // namespace xstd
