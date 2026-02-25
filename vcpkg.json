@@ -1,0 +1,10 @@
+{
+  "name": "xstd-compress",
+  "version": "1.0.0",
+  "dependencies": [
+    "gtest",
+    "zstd",
+    "fmt",
+    "openssl"
+  ]
+}

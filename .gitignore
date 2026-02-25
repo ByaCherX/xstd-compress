@@ -1,0 +1,32 @@
+# emacs files
+*~
+*\#
+.tramp_history
+
+# vim cache files
+*.swp
+
+# auto generated files
+*.logrt
+
+/build
+/build_*
+/build-*
+
+# ignore build files
+CMakeCache.txt
+CMakeFiles
+Makefile
+cmake_install.cmake
+CTestTestfile.cmake
+*.a
+*.o
+*.so
+*.dll
+*.lib
+*.dylib
+cmake-build-*
+
+# Microsoft Visual Studio Code
+.vscode
+.devcontainer/
