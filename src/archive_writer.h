@@ -6,7 +6,7 @@
 // Usage:
 //   ArchiveWriterOptions opts;
 //   opts.page_size    = PageSize::PAGE_64K;
-//   opts.codec        = CompressionCodec(CompressionType::ZSTD, CompressionLevel::DEFAULT);
+//   opts.codec        = CompressionCodec(CompressionType::ZSTD, CompressionLevel::XSTD_greedy);
 //   opts.encryption   = EncryptionAlgorithm::AES_GCM_V1;
 //   opts.key          = my_32_byte_key;
 //
@@ -38,7 +38,7 @@ namespace xstd {
 // ---------------------------------------------------------------------------
 struct ArchiveWriterOptions {
     PageSize          page_size  {PageSize::PAGE_64K};
-    CompressionCodec  codec      {CompressionType::ZSTD, CompressionLevel::DEFAULT};
+    CompressionCodec  codec      {CompressionType::ZSTD, CompressionLevel::XSTD_greedy};
     EncryptionAlgorithm encryption{EncryptionAlgorithm::NONE};
     AesKeySize        key_size   {AesKeySize::AES_256};
 

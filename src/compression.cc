@@ -13,10 +13,18 @@ namespace xstd {
 
 static int ToZstdLevel(CompressionLevel lvl) noexcept {
     switch (lvl) {
-        case CompressionLevel::FAST:    return 1;
-        case CompressionLevel::DEFAULT: return ZSTD_defaultCLevel();
-        case CompressionLevel::BEST:    return ZSTD_maxCLevel();
-        default:                        return ZSTD_defaultCLevel();
+        case CompressionLevel::XSTD_RESERVED_LEVEL:    return ZSTD_defaultCLevel();
+        case CompressionLevel::XSTD_fast:              return 1;
+        case CompressionLevel::XSTD_dfast:             return 3;
+        case CompressionLevel::XSTD_greedy:            return 6;
+        case CompressionLevel::XSTD_lazy:              return 9;
+        case CompressionLevel::XSTD_lazy2:             return 12;
+        case CompressionLevel::XSTD_btlazy:            return 15;
+        case CompressionLevel::XSTD_btopt:             return 18;
+        case CompressionLevel::XSTD_bultra:            return 20;
+        case CompressionLevel::XSTD_bmax:              return ZSTD_maxCLevel();
+        case CompressionLevel::XSTD_RESERVED_LEVEL_15: return ZSTD_defaultCLevel();
+        default:                                       return ZSTD_defaultCLevel();
     }
 }
 

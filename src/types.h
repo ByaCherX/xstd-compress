@@ -67,7 +67,7 @@ enum class Encoding : uint8_t {
 };
 
 // ---------------------------------------------------------------------------
-// Compression codec type. 4 bits (0-15).
+// Compression codec type. 3 bits (0-7).
 // ---------------------------------------------------------------------------
 enum class CompressionType : uint8_t {
     UNCOMPRESSED = 0,
@@ -75,37 +75,63 @@ enum class CompressionType : uint8_t {
     BROTLI       = 2,
     LZ4          = 3,
     ZSTD         = 4,
+    OPENZL       = 5,
+    SNAPPY       = 6,
+    RESERVED_3   = 7,
 };
 
 // ---------------------------------------------------------------------------
 // Compression effort level. 4 bits (0-15).
 // ---------------------------------------------------------------------------
 enum class CompressionLevel : uint8_t {
-    FAST    = 0,
-    DEFAULT = 1,
-    BEST    = 2,
+    XSTD_RESERVED_LEVEL = 0, // Reserved for future use
+    XSTD_fast           = 1,
+    XSTD_dfast          = 2,
+    XSTD_greedy         = 3,
+    XSTD_lazy           = 4,
+    XSTD_lazy2          = 5,
+    XSTD_btlazy         = 6,
+    XSTD_btopt          = 7,
+    XSTD_bultra         = 8,
+    XSTD_bmax           = 9,
+    XSTD_RESERVED_LEVEL_15 = 15, // Reserved for future use
+};
+
+// ---------------------------------------------------------------------------
+// Reserved bit in CompressionCodec byte.
+// ---------------------------------------------------------------------------
+enum class CompressionReserved : uint8_t {
+    ZERO = 0, // Must be zero for forward compatibility
+    ONE  = 1,
 };
 
 // ---------------------------------------------------------------------------
 // CompressionCodec — packed into a single byte:
-//   bits [7:4] = CompressionType
-//   bits [3:0] = CompressionLevel
+//   bit  [7]   = CompressionReserved (1 bit)
+//   bits [6:4] = CompressionType     (3 bits)
+//   bits [3:0] = CompressionLevel    (4 bits)
 // ---------------------------------------------------------------------------
 struct CompressionCodec {
     uint8_t raw{0};
 
     constexpr CompressionCodec() = default;
 
-    constexpr CompressionCodec(CompressionType type, CompressionLevel level) noexcept
+    constexpr CompressionCodec(CompressionType    type,
+                               CompressionLevel   level,
+                               CompressionReserved reserved = CompressionReserved::ZERO) noexcept
         : raw(static_cast<uint8_t>(
-              (static_cast<uint8_t>(type)  << 4) |
-              (static_cast<uint8_t>(level) & 0x0F))) {}
+              (static_cast<uint8_t>(reserved)            << 7) |
+              ((static_cast<uint8_t>(type)  & 0x07u)     << 4) |
+              (static_cast<uint8_t>(level)  & 0x0Fu))) {}
 
+    [[nodiscard]] constexpr CompressionReserved Reserved() const noexcept {
+        return static_cast<CompressionReserved>(raw >> 7);
+    }
     [[nodiscard]] constexpr CompressionType  Type()  const noexcept {
-        return static_cast<CompressionType>(raw >> 4);
+        return static_cast<CompressionType>((raw >> 4) & 0x07u);
     }
     [[nodiscard]] constexpr CompressionLevel Level() const noexcept {
-        return static_cast<CompressionLevel>(raw & 0x0F);
+        return static_cast<CompressionLevel>(raw & 0x0Fu);
     }
 };
 

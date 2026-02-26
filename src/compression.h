@@ -69,7 +69,7 @@ public:
 // ---------------------------------------------------------------------------
 class ZstdCompressor final : public ICompressor {
 public:
-    explicit ZstdCompressor(CompressionLevel level = CompressionLevel::DEFAULT);
+    explicit ZstdCompressor(CompressionLevel level = CompressionLevel::XSTD_greedy);
 
     void Compress(std::span<const uint8_t> input,
                   std::vector<uint8_t>&    output) const override;

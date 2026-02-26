@@ -170,7 +170,7 @@ const std::vector<uint8_t>& ArchiveReader::ReadPage(const PageHeader& ph) {
     // Decompress.
     CompressionCodec codec;
     codec.raw = ph.compression_codec;
-    auto comp = CompressorFactory::Create(codec);
+    std::unique_ptr<ICompressor> comp = CompressorFactory::Create(codec);
     std::vector<uint8_t> decompressed;
     comp->Decompress(plaintext, decompressed, ph.uncompressed_size);
 
