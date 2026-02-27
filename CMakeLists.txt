@@ -31,15 +31,9 @@ set(CMAKE_CXX_FLAGS_RELWITHDEBINFO      "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -O3 $
 set(CMAKE_CXX_FLAGS_DEBUG               "${CMAKE_CXX_FLAGS_DEBUG} -O${DEBUG_O_LEVEL} ${DEBUG_INFO_FLAGS} ${CMAKE_CXX_FLAGS_ADD}")
 
 # ----- Project directories
-set(INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include")
 set(SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src")
 set(PACKAGE_DIR "${SRC_DIR}/packages")
 set(TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests")
-
-# Additional dependencies 
-set(Package_sources
-    ${PACKAGE_DIR}/xxhash/xxhash.c
-)
 
 add_library(Xstd
     ${SRC_DIR}/hasher.cc
@@ -50,7 +44,6 @@ add_library(Xstd
     ${SRC_DIR}/catalog.cc
     ${SRC_DIR}/archive_writer.cc
     ${SRC_DIR}/archive_reader.cc
-    ${Package_sources}
 )
 
 target_link_libraries(Xstd PUBLIC
@@ -63,12 +56,12 @@ target_link_libraries(Xstd PUBLIC
 target_include_directories(Xstd PUBLIC
     ${SRC_DIR}
     ${SRC_DIR}/packages
-    ${INCLUDE_DIR}
 )
 
 # ----- Add tests subdirectory
 add_subdirectory(${TEST_DIR})
 add_subdirectory(${PACKAGE_DIR}/gdelta)
+add_subdirectory(${PACKAGE_DIR}/xxhash)
 
 # ----- Additional Build Targets
 # Add more targets here with zstd support:
