@@ -117,13 +117,23 @@ void ArchiveWriter::Finalise() {
     file_.write(reinterpret_cast<const char*>(cat_buf.data()),
                 static_cast<std::streamsize>(cat_buf.size()));
 
-    // Write footer.
+    // Build footer struct.
     ArchiveFooter footer;
     footer.catalog_offset = catalog_offset;
     footer.catalog_size   = static_cast<int64_t>(cat_buf.size());
     footer.num_files      = static_cast<int64_t>(file_count_);
 
-    file_.write(reinterpret_cast<const char*>(&footer), sizeof(footer));
+    // Write footer — encrypted when an encryptor is active.
+    if (encryptor_) {
+        const auto* raw = reinterpret_cast<const uint8_t*>(&footer);
+        auto enc_footer = encryptor_->Encrypt(
+            std::span<const uint8_t>(raw, sizeof(footer)), opts_.key);
+        file_.write(reinterpret_cast<const char*>(enc_footer.data()),
+                    static_cast<std::streamsize>(enc_footer.size()));
+    } else {
+        file_.write(reinterpret_cast<const char*>(&footer), sizeof(footer));
+    }
+
     file_.flush();
     file_.close();
 }
@@ -150,6 +160,35 @@ void ArchiveWriter::WriteArchiveHeader() {
     hdr.num_pages  = 0;
 
     file_.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
+}
+
+bool ArchiveWriter::DeleteFile(const std::string& archive_path) {
+    if (finalised_)
+        throw std::runtime_error("ArchiveWriter: cannot delete files after Finalise()");
+
+    auto opt_meta = catalog_.Find(archive_path);
+    if (!opt_meta) return false;
+    if (opt_meta->deleted) return true;  // already deleted
+
+    // Patch each page's flags byte on disk: set bit 1 (deleted).
+    // PageHeader::flags is at byte offset 11 within the packed struct.
+    constexpr std::size_t kFlagsOffset = 11;
+    FileMetadata meta = *opt_meta;
+    for (PageHeader& ph : meta.pages) {
+        ph.SetDeleted(true);
+        file_.seekp(static_cast<std::streamoff>(ph.offset) +
+                    static_cast<std::streamoff>(kFlagsOffset),
+                    std::ios::beg);
+        file_.write(reinterpret_cast<const char*>(&ph.flags), 1);
+    }
+
+    meta.deleted = true;
+    catalog_.Insert(archive_path, meta);
+
+    // Restore the put pointer to end-of-file so that Finalise()
+    // correctly determines the catalog offset.
+    file_.seekp(0, std::ios::end);
+    return true;
 }
 
 PageHeader ArchiveWriter::WritePage(std::span<const uint8_t> chunk,

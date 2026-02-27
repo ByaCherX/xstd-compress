@@ -17,7 +17,7 @@ constexpr uint32_t kFooterMagic = 0x58454E44u;  // 'X','E','N','D'
 // ---------------------------------------------------------------------------
 // Versioning
 // ---------------------------------------------------------------------------
-constexpr int32_t kCurrentVersion  = 1;
+constexpr int32_t kCurrentVersion  = 2;
 constexpr int32_t kMinReadVersion  = 1;  // oldest version this code can read
 
 // ---------------------------------------------------------------------------

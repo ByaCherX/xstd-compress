@@ -74,6 +74,12 @@ public:
     void AddFileFromDisk(const std::filesystem::path& source,
                          const std::string&           archive_path);
 
+    /// Logically delete a previously-added file.
+    /// Marks the file's catalog entry and each of its page headers on disk as deleted.
+    /// Returns false if the file was not found.
+    /// Physical data is preserved; use ArchiveReader::RecoverFile() to restore.
+    bool DeleteFile(const std::string& archive_path);
+
     /// Writes catalog + footer, flushes and closes the archive.
     void Finalise();
 

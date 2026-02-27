@@ -45,6 +45,7 @@ std::string DeserialiseKey(const uint8_t*& p, const uint8_t* end) {
 //   [int64  created_time]
 //   [int64  last_modified_time]
 //   [int64  original_size]
+//   [uint8  deleted]          (0 = active, 1 = logically deleted)
 //   [uint32 num_pages]
 //     For each page: kPageHeaderSize bytes (raw packed struct)
 void SerialiseValue(std::vector<uint8_t>& buf, const FileMetadata& m) {
@@ -62,6 +63,9 @@ void SerialiseValue(std::vector<uint8_t>& buf, const FileMetadata& m) {
     WriteInt64(buf, m.created_time);
     WriteInt64(buf, m.last_modified_time);
     WriteInt64(buf, m.original_size);
+
+    // deleted flag
+    buf.push_back(m.deleted ? uint8_t{1} : uint8_t{0});
 
     // pages
     detail::WriteUint32(buf, static_cast<uint32_t>(m.pages.size()));
@@ -95,6 +99,10 @@ FileMetadata DeserialiseValue(const uint8_t*& p, const uint8_t* end) {
     m.created_time       = ReadInt64(p); p += 8;
     m.last_modified_time = ReadInt64(p); p += 8;
     m.original_size      = ReadInt64(p); p += 8;
+
+    // deleted flag
+    if (p + 1 > end) throw std::runtime_error("Catalog: truncated deleted flag");
+    m.deleted = (*p++ != 0);
 
     // pages
     if (p + 4 > end) throw std::runtime_error("Catalog: truncated num_pages");

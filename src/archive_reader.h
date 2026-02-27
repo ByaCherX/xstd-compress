@@ -61,6 +61,7 @@ public:
 
     // -- List --
     [[nodiscard]] std::vector<std::string>      ListFiles()                         const;
+    [[nodiscard]] std::vector<std::string>      ListDeletedFiles()                  const;
     [[nodiscard]] std::vector<std::string>      ListDirectory(const std::string& prefix) const;
     [[nodiscard]] std::optional<FileMetadata>   Stat(const std::string& archive_path) const;
 
@@ -68,6 +69,10 @@ public:
     [[nodiscard]] std::vector<uint8_t> ExtractFile(const std::string& archive_path);
     void ExtractFileToDisk(const std::string&           archive_path,
                            const std::filesystem::path& dest);
+
+    // -- Soft-delete recovery --
+    /// Returns the data of a logically-deleted file, or std::nullopt if not found / unrecoverable.
+    [[nodiscard]] std::optional<std::vector<uint8_t>> RecoverFile(const std::string& archive_path);
 
     // -- Archive info --
     [[nodiscard]] const ArchiveHeader& Header()    const noexcept { return header_; }

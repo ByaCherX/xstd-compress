@@ -118,7 +118,12 @@ struct PageHeader {
     void SetEncrypted(bool v) noexcept {
         flags = static_cast<uint8_t>(v ? (flags | 0x01u) : (flags & ~0x01u));
     }
+
+    [[nodiscard]] bool IsDeleted() const noexcept { return (flags & 0x02u) != 0; }
+    void SetDeleted(bool v) noexcept {
+        flags = static_cast<uint8_t>(v ? (flags | 0x02u) : (flags & ~0x02u));
     }
+
     [[nodiscard]] CompressionCodec Codec() const noexcept {
         CompressionCodec c; c.raw = compression_codec; return c;
     }
@@ -140,6 +145,7 @@ struct FileMetadata {
     int64_t  created_time     {0};                  // Unix timestamp (seconds since epoch)
     int64_t  last_modified_time {0};                // Unix timestamp
     int64_t  original_size    {0};                  // total uncompressed size in bytes
+    bool     deleted          {false};              // logically deleted (soft delete)
 };
 
 // ---------------------------------------------------------------------------

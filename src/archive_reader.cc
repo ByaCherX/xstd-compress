@@ -1,5 +1,6 @@
 #include "archive_reader.h"
 
+#include <cstring>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -38,7 +39,17 @@ void ArchiveReader::Open() {
 
 std::vector<std::string> ArchiveReader::ListFiles() const {
     std::vector<std::string> paths;
-    catalog_.ScanAllPaths(paths);
+    catalog_.ScanAll([&](const std::string& k, const FileMetadata& v) {
+        if (!v.deleted) paths.push_back(k);
+    });
+    return paths;
+}
+
+std::vector<std::string> ArchiveReader::ListDeletedFiles() const {
+    std::vector<std::string> paths;
+    catalog_.ScanAll([&](const std::string& k, const FileMetadata& v) {
+        if (v.deleted) paths.push_back(k);
+    });
     return paths;
 }
 
@@ -60,7 +71,7 @@ std::optional<FileMetadata> ArchiveReader::Stat(const std::string& archive_path)
 
 std::vector<uint8_t> ArchiveReader::ExtractFile(const std::string& archive_path) {
     auto opt_meta = catalog_.Find(archive_path);
-    if (!opt_meta)
+    if (!opt_meta || opt_meta->deleted)
         throw std::runtime_error("ArchiveReader: file not found: " + archive_path);
     return AssembleFile(*opt_meta);
 }
@@ -99,12 +110,40 @@ void ArchiveReader::ReadAndValidateHeader() {
 // ---------------------------------------------------------------------------
 
 void ArchiveReader::ReadAndValidateCatalog() {
-    // Read footer from end of file.
-    file_.seekg(-static_cast<std::streamoff>(sizeof(ArchiveFooter)), std::ios::end);
-    ArchiveFooter footer{};
-    file_.read(reinterpret_cast<char*>(&footer), sizeof(footer));
-    if (file_.gcount() != sizeof(footer))
+    // Determine how many bytes the footer occupies on disk.
+    // When the archive is encrypted the footer itself is also encrypted:
+    //   encrypted_footer_size = IV + sizeof(ArchiveFooter) + tag (GCM) or 0 (CTR)
+    std::unique_ptr<IEncryptor> footer_enc;
+    std::streamsize footer_stored_size = static_cast<std::streamsize>(sizeof(ArchiveFooter));
+
+    if (header_.encryption.IsEncrypted()) {
+        footer_enc = EncryptorFactory::Create(header_.encryption.GetAlgorithm());
+        if (!footer_enc)
+            throw std::runtime_error("ArchiveReader: unsupported encryption algorithm in header");
+        footer_stored_size = static_cast<std::streamsize>(
+            footer_enc->IvSize() + sizeof(ArchiveFooter) + footer_enc->TagSize());
+    }
+
+    // Read footer bytes from end of file.
+    file_.seekg(-footer_stored_size, std::ios::end);
+    std::vector<uint8_t> footer_raw(static_cast<std::size_t>(footer_stored_size));
+    file_.read(reinterpret_cast<char*>(footer_raw.data()), footer_stored_size);
+    if (file_.gcount() != footer_stored_size)
         throw std::runtime_error("ArchiveReader: cannot read archive footer");
+
+    // Decrypt footer if needed.
+    ArchiveFooter footer{};
+    if (footer_enc) {
+        if (opts_.key.empty())
+            throw std::runtime_error("ArchiveReader: archive footer is encrypted but no key provided");
+        auto plain = footer_enc->Decrypt(footer_raw, opts_.key);
+        if (plain.size() != sizeof(ArchiveFooter))
+            throw std::runtime_error("ArchiveReader: decrypted footer has unexpected size");
+        std::memcpy(&footer, plain.data(), sizeof(ArchiveFooter));
+    } else {
+        std::memcpy(&footer, footer_raw.data(), sizeof(ArchiveFooter));
+    }
+
     if (footer.footer_magic != kFooterMagic)
         throw std::runtime_error("ArchiveReader: invalid footer magic — archive may be truncated");
 
@@ -145,26 +184,28 @@ const std::vector<uint8_t>& ArchiveReader::ReadPage(const PageHeader& ph) {
         throw std::runtime_error("ArchiveReader: page data truncated (page_id="
                                  + std::to_string(ph.page_id) + ")");
 
-    // Verify CRC (over ciphertext/compressed-plaintext before decryption).
-    const uint64_t expected_crc = static_cast<uint64_t>(ph.crc32);
-    const uint64_t actual_crc   = XXH64(raw.data(), raw.size(), kPageHashSeed) & 0xFFFF'FFFF;
-    if (actual_crc != expected_crc)
-        throw std::runtime_error("ArchiveReader: CRC mismatch on page_id="
-                                 + std::to_string(ph.page_id));
-
-    // Decrypt if needed.
+    // Decrypt if needed, then verify CRC.
+    // CRC is always computed over the compressed plaintext (post-decryption).
     std::vector<uint8_t> plaintext;
     if (ph.IsEncrypted()) {
         if (opts_.key.empty())
             throw std::runtime_error("ArchiveReader: page is encrypted but no key provided");
-        const EncryptionAlgorithm alg =
-            static_cast<EncryptionAlgorithm>(header_.encryption_alg);
+        const EncryptionAlgorithm alg = header_.encryption.GetAlgorithm();
         auto enc = EncryptorFactory::Create(alg);
         if (!enc)
             throw std::runtime_error("ArchiveReader: unsupported encryption algorithm");
         plaintext = enc->Decrypt(raw, opts_.key);
     } else {
         plaintext = std::move(raw);
+    }
+
+    // Verify CRC over compressed plaintext.
+    {
+        const uint64_t expected_crc = static_cast<uint64_t>(ph.crc32);
+        const uint64_t actual_crc   = XXH64(plaintext.data(), plaintext.size(), kPageHashSeed) & 0xFFFF'FFFF;
+        if (actual_crc != expected_crc)
+            throw std::runtime_error("ArchiveReader: CRC mismatch on page_id="
+                                     + std::to_string(ph.page_id));
     }
 
     // Decompress.
@@ -207,6 +248,22 @@ std::vector<uint8_t> ArchiveReader::AssembleFile(const FileMetadata& meta) {
                                  + meta.file_name + " — data may be corrupted");
 
     return result;
+}
+
+// ---------------------------------------------------------------------------
+// RecoverFile
+// ---------------------------------------------------------------------------
+
+std::optional<std::vector<uint8_t>> ArchiveReader::RecoverFile(
+    const std::string& archive_path)
+{
+    auto opt_meta = catalog_.Find(archive_path);
+    if (!opt_meta || !opt_meta->deleted) return std::nullopt;
+    try {
+        return AssembleFile(*opt_meta);
+    } catch (...) {
+        return std::nullopt;
+    }
 }
 
 } // namespace xstd
