@@ -39,20 +39,81 @@ constexpr uint32_t PageSizeBytes(PageSize ps) noexcept {
 
 // ---------------------------------------------------------------------------
 // Encryption algorithms supported by Xstd.
+// 4-bit values (0-14 usable; 0xF = NONE sentinel).
 // ---------------------------------------------------------------------------
 enum class EncryptionAlgorithm : uint8_t {
-    NONE       = 0xFF, // No encryption
-    AES_GCM_V1 = 0,    // AES-256-GCM  (authenticated)
-    AES_CTR_V1 = 1,    // AES-256-CTR  (faster, no auth tag)
+    NONE       = 0x0F, // No encryption (4-bit sentinel)
+    AES_GCM_V1 = 0,    // AES-GCM  (authenticated)
+    AES_CTR_V1 = 1,    // AES-CTR  (faster, no auth tag)
 };
 
 // ---------------------------------------------------------------------------
-// AES key sizes.
+// AES key sizes. Values are actual byte counts (16 / 24 / 32).
 // ---------------------------------------------------------------------------
 enum class AesKeySize : uint8_t {
     AES_128 = 16,
     AES_192 = 24,
     AES_256 = 32,
+};
+
+// ---------------------------------------------------------------------------
+// ArchiveEncryption — packed into a single byte:
+//   bit  [7]   = Encrypted flag        (1 bit)
+//   bits [6:4] = AesKeySize index      (3 bits: 0=AES128, 1=AES192, 2=AES256)
+//   bits [3:0] = EncryptionAlgorithm   (4 bits: 0xF=NONE, 0=GCM, 1=CTR)
+// ---------------------------------------------------------------------------
+struct ArchiveEncryption {
+    uint8_t raw{0x0Fu};  // default = NONE
+
+    constexpr ArchiveEncryption() noexcept = default;
+    constexpr explicit ArchiveEncryption(uint8_t v) noexcept : raw(v) {}
+
+    [[nodiscard]] constexpr bool IsEncrypted() const noexcept {
+        return (raw >> 7) & 1u;
+    }
+    void SetEncrypted(bool v) noexcept {
+        raw = static_cast<uint8_t>(v ? (raw | 0x80u) : (raw & ~0x80u));
+    }
+
+    [[nodiscard]] constexpr EncryptionAlgorithm GetAlgorithm() const noexcept {
+        const uint8_t bits = raw & 0x0Fu;
+        if (bits == 0x0Fu) return EncryptionAlgorithm::NONE;
+        return static_cast<EncryptionAlgorithm>(bits);
+    }
+    void SetAlgorithm(EncryptionAlgorithm alg) noexcept {
+        const uint8_t bits = (alg == EncryptionAlgorithm::NONE)
+                             ? 0x0Fu : (static_cast<uint8_t>(alg) & 0x0Fu);
+        raw = static_cast<uint8_t>((raw & 0xF0u) | bits);
+    }
+
+    [[nodiscard]] constexpr AesKeySize GetKeySize() const noexcept {
+        switch ((raw >> 4) & 0x07u) {
+            case 0: return AesKeySize::AES_128;
+            case 1: return AesKeySize::AES_192;
+            default: return AesKeySize::AES_256;
+        }
+    }
+    void SetKeySize(AesKeySize ks) noexcept {
+        uint8_t idx = (ks == AesKeySize::AES_128) ? 0u
+                    : (ks == AesKeySize::AES_192) ? 1u : 2u;
+        raw = static_cast<uint8_t>((raw & 0x8Fu) | (idx << 4));
+    }
+
+    /// Construct a "no encryption" descriptor.
+    [[nodiscard]] static constexpr ArchiveEncryption MakeNone() noexcept {
+        return ArchiveEncryption{0x0Fu};
+    }
+
+    /// Construct an encryption descriptor for the given algorithm and key size.
+    [[nodiscard]] static ArchiveEncryption Make(EncryptionAlgorithm alg,
+                                                AesKeySize          ks) noexcept {
+        if (alg == EncryptionAlgorithm::NONE) return MakeNone();
+        const uint8_t alg_bits = static_cast<uint8_t>(alg) & 0x0Fu;
+        const uint8_t ks_idx   = (ks == AesKeySize::AES_128) ? 0u
+                               : (ks == AesKeySize::AES_192) ? 1u : 2u;
+        return ArchiveEncryption{static_cast<uint8_t>(
+            (1u << 7) | (ks_idx << 4) | alg_bits)};
+    }
 };
 
 // ---------------------------------------------------------------------------
