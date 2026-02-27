@@ -39,11 +39,13 @@ namespace xstd {
 struct ArchiveWriterOptions {
     PageSize          page_size  {PageSize::PAGE_64K};
     CompressionCodec  codec      {CompressionType::ZSTD, CompressionLevel::XSTD_greedy};
-    EncryptionAlgorithm encryption{EncryptionAlgorithm::NONE};
-    AesKeySize        key_size   {AesKeySize::AES_256};
 
-    /// Encryption key bytes. Required when encryption != NONE.
-    /// Must match key_size (16, 24, or 32 bytes).
+    /// Encryption descriptor: algorithm + key size packed in one byte.
+    /// Use ArchiveEncryption::Make(alg, key_size) or leave default for no encryption.
+    ArchiveEncryption encryption {};
+
+    /// Encryption key bytes. Required when encryption.IsEncrypted().
+    /// Must match the key size encoded in encryption (16, 24, or 32 bytes).
     std::vector<uint8_t> key;
 };
 

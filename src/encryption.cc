@@ -1,5 +1,6 @@
 #include "encryption.h"
 
+#include <array>
 #include <stdexcept>
 #include <string>
 

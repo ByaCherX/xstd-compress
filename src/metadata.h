@@ -23,43 +23,62 @@
 namespace xstd {
 
 // ---------------------------------------------------------------------------
+// ArchiveFlags — 1-byte flags field in ArchiveHeader.
+//
+//   bit 0 : isCompressed
+//   bit 1 : partial_metadata_protection
+//   bits[7:2] : reserved (must be zero)
+// ---------------------------------------------------------------------------
+struct ArchiveFlags {
+    uint8_t raw{0};
+
+    [[nodiscard]] bool IsCompressed()                  const noexcept { return (raw & 0x01u) != 0; }
+    [[nodiscard]] bool HasPartialMetadataProtection()  const noexcept { return (raw & 0x02u) != 0; }
+
+    void SetCompressed(bool v) noexcept {
+        raw = static_cast<uint8_t>(v ? (raw | 0x01u) : (raw & ~0x01u));
+    }
+    void SetPartialMetadataProtection(bool v) noexcept {
+        raw = static_cast<uint8_t>(v ? (raw | 0x02u) : (raw & ~0x02u));
+    }
+};
+
+// ---------------------------------------------------------------------------
 // ArchiveHeader — written at byte offset 0, fixed 32 bytes.
 //
 // On-disk layout:
-//   offset  0 : uint32_t magic          (0x58535444 = 'XSTD')
-//   offset  4 : int32_t  version
-//   offset  8 : uint8_t  page_size      (PageSize enum)
-//   offset  9 : uint8_t  encryption_alg (EncryptionAlgorithm enum)
-//   offset 10 : uint8_t  aes_key_size   (AesKeySize enum — 16/24/32)
-//   offset 11 : uint8_t  flags          (bit 0 = has_encryption, bit 1 = partial_metadata_protection)
-//   offset 12 : int64_t  num_pages
-//   offset 20 : uint8_t  reserved[12]
+//   offset  0 : uint32_t         magic      (0x58535444 = 'XSTD')
+//   offset  4 : int32_t          version
+//   offset  8 : uint8_t          page_size  (PageSize enum)
+//   offset  9 : ArchiveEncryption encryption  packed byte:
+//                 bit[7]   = encrypted flag
+//                 bits[6:4]= AesKeySize
+//                 bits[3:0]= EncryptionAlgorithm
+//   offset 10 : ArchiveFlags     flags      (bit0=isCompressed, bit1=partial_metadata_prot)
+//   offset 11 : uint8_t          reserved_1
+//   offset 12 : int64_t          num_pages
+//   offset 20 : uint8_t          reserved[12]
 // ---------------------------------------------------------------------------
 #pragma pack(push, 1)
 struct ArchiveHeader {
-    uint32_t magic          {kMagic};
-    int32_t  version        {kCurrentVersion};
-    uint8_t  page_size      {static_cast<uint8_t>(PageSize::PAGE_64K)};
-    uint8_t  encryption_alg {static_cast<uint8_t>(EncryptionAlgorithm::NONE)};
-    uint8_t  aes_key_size   {static_cast<uint8_t>(AesKeySize::AES_256)};
-    uint8_t  flags          {0};
-    int64_t  num_pages      {0};
-    uint8_t  reserved[12]   {};
+    uint32_t          magic      {kMagic};
+    int32_t           version    {kCurrentVersion};
+    uint8_t           page_size  {static_cast<uint8_t>(PageSize::PAGE_64K)};
+    ArchiveEncryption encryption {};
+    ArchiveFlags      flags      {};
+    uint8_t           reserved_1 {0};
+    int64_t           num_pages  {0};
+    uint8_t           reserved[12] {};
 
     static_assert(sizeof(uint32_t) + sizeof(int32_t) +
-                  3 * sizeof(uint8_t) + sizeof(uint8_t) +
+                  sizeof(uint8_t) + sizeof(ArchiveEncryption) +
+                  sizeof(ArchiveFlags) + sizeof(uint8_t) +
                   sizeof(int64_t) + 12 == kArchiveHeaderSize,
                   "ArchiveHeader must be exactly 32 bytes");
 
-    [[nodiscard]] bool IsEncrypted() const noexcept { return (flags & 0x01) != 0; }
-    [[nodiscard]] bool HasPartialMetadataProtection() const noexcept { return (flags & 0x02) != 0; }
-
-    void SetEncrypted(bool v) noexcept {
-        flags = v ? (flags | 0x01) : (flags & ~0x01);
-    }
-    void SetPartialMetadataProtection(bool v) noexcept {
-        flags = v ? (flags | 0x02) : (flags & ~0x02);
-    }
+    [[nodiscard]] bool IsEncrypted()                  const noexcept { return encryption.IsEncrypted(); }
+    [[nodiscard]] bool IsCompressed()                 const noexcept { return flags.IsCompressed(); }
+    [[nodiscard]] bool HasPartialMetadataProtection() const noexcept { return flags.HasPartialMetadataProtection(); }
 };
 #pragma pack(pop)
 static_assert(sizeof(ArchiveHeader) == kArchiveHeaderSize, "ArchiveHeader size mismatch");
@@ -69,11 +88,14 @@ static_assert(sizeof(ArchiveHeader) == kArchiveHeaderSize, "ArchiveHeader size m
 //
 // On-disk layout:
 //   offset  0 : int32_t  page_id
-//   offset  4 : int32_t  offset_from_archive_start  (high-level; actual seek = this value)
+//   offset  4 : int32_t  offset_from_archive_start  (actual seek position)
 //   offset  8 : uint8_t  page_type         (PageType enum)
 //   offset  9 : uint8_t  encoding          (Encoding enum)
 //   offset 10 : uint8_t  compression_codec (CompressionCodec::raw)
-//   offset 11 : uint8_t  flags             (bit 0 = encrypted)
+//   offset 11 : uint8_t  flags
+//                 bit 0 = encrypted
+//                 bit 1 = logically deleted (soft delete)
+//                 bits[7:2] = reserved
 //   offset 12 : int32_t  uncompressed_size
 //   offset 16 : int32_t  compressed_size
 //   offset 20 : uint32_t crc32             (CRC32 of compressed plaintext data)
@@ -90,11 +112,12 @@ struct PageHeader {
     int32_t  uncompressed_size  {0};
     int32_t  compressed_size    {0};
     uint32_t crc32              {0};
-    uint8_t  iv[8]              {};    // partial IV storage; full IV is prepended to ciphertext for AES-GCM/CTR
+    uint8_t  iv[8]              {};
 
-    [[nodiscard]] bool IsEncrypted() const noexcept { return (flags & 0x01) != 0; }
+    [[nodiscard]] bool IsEncrypted() const noexcept { return (flags & 0x01u) != 0; }
     void SetEncrypted(bool v) noexcept {
-        flags = v ? (flags | 0x01) : (flags & ~0x01);
+        flags = static_cast<uint8_t>(v ? (flags | 0x01u) : (flags & ~0x01u));
+    }
     }
     [[nodiscard]] CompressionCodec Codec() const noexcept {
         CompressionCodec c; c.raw = compression_codec; return c;

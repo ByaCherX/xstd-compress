@@ -1,6 +1,7 @@
 #include "archive_writer.h"
 
 #include <chrono>
+#include <cstddef>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -27,8 +28,8 @@ ArchiveWriter::ArchiveWriter(const std::filesystem::path& path,
         throw std::runtime_error("ArchiveWriter: cannot open file: " + path.string());
 
     compressor_ = CompressorFactory::Create(opts_.codec);
-    if (opts_.encryption != EncryptionAlgorithm::NONE)
-        encryptor_ = EncryptorFactory::Create(opts_.encryption);
+    if (opts_.encryption.IsEncrypted())
+        encryptor_ = EncryptorFactory::Create(opts_.encryption.GetAlgorithm());
 
     WriteArchiveHeader();
 }
@@ -132,21 +133,21 @@ void ArchiveWriter::Finalise() {
 // ---------------------------------------------------------------------------
 
 void ArchiveWriter::ValidateOptions() const {
-    if (opts_.encryption != EncryptionAlgorithm::NONE) {
-        const std::size_t expected = static_cast<std::size_t>(opts_.key_size);
+    if (opts_.encryption.IsEncrypted()) {
+        const std::size_t expected =
+            static_cast<std::size_t>(opts_.encryption.GetKeySize());
         if (opts_.key.size() != expected)
             throw std::invalid_argument(
-                "ArchiveWriter: key size does not match key_size option");
+                "ArchiveWriter: key size does not match the key size encoded in encryption option");
     }
 }
 
 void ArchiveWriter::WriteArchiveHeader() {
     ArchiveHeader hdr;
-    hdr.page_size      = static_cast<uint8_t>(opts_.page_size);
-    hdr.encryption_alg = static_cast<uint8_t>(opts_.encryption);
-    hdr.aes_key_size   = static_cast<uint8_t>(opts_.key_size);
-    hdr.num_pages      = 0;  // will not be patched back; use footer's num_files instead
-    if (opts_.encryption != EncryptionAlgorithm::NONE) hdr.SetEncrypted(true);
+    hdr.page_size  = static_cast<uint8_t>(opts_.page_size);
+    hdr.encryption = opts_.encryption;
+    hdr.flags.SetCompressed(opts_.codec.Type() != CompressionType::UNCOMPRESSED);
+    hdr.num_pages  = 0;
 
     file_.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
 }
