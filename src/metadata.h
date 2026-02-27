@@ -98,7 +98,7 @@ static_assert(sizeof(ArchiveHeader) == kArchiveHeaderSize, "ArchiveHeader size m
 //                 bits[7:2] = reserved
 //   offset 12 : int32_t  uncompressed_size
 //   offset 16 : int32_t  compressed_size
-//   offset 20 : uint32_t crc32             (CRC32 of compressed plaintext data)
+//   offset 20 : uint32_t crc32
 //   offset 24 : uint8_t  iv[8]             (first 8 bytes of IV/nonce; remaining bytes follow data or are zero)
 // ---------------------------------------------------------------------------
 #pragma pack(push, 1)
@@ -107,8 +107,8 @@ struct PageHeader {
     int32_t  offset             {0};   // byte offset from start of archive file
     uint8_t  page_type          {static_cast<uint8_t>(PageType::DATA_PAGE)};
     uint8_t  encoding           {static_cast<uint8_t>(Encoding::PLAIN)};
-    uint8_t  compression_codec  {0};   // CompressionCodec::raw
-    uint8_t  flags              {0};   // bit 0 = page is encrypted
+    uint8_t  compression_codec  {0};
+    uint8_t  flags              {0};
     int32_t  uncompressed_size  {0};
     int32_t  compressed_size    {0};
     uint32_t crc32              {0};
@@ -127,8 +127,8 @@ struct PageHeader {
     [[nodiscard]] CompressionCodec Codec() const noexcept {
         CompressionCodec c; c.raw = compression_codec; return c;
     }
-    [[nodiscard]] PageType    Type()     const noexcept { return static_cast<PageType>(page_type); }
-    [[nodiscard]] Encoding    GetEncoding() const noexcept { return static_cast<Encoding>(encoding); }
+    [[nodiscard]] PageType Type()        const noexcept { return static_cast<PageType>(page_type); }
+    [[nodiscard]] Encoding GetEncoding() const noexcept { return static_cast<Encoding>(encoding); }
 };
 #pragma pack(pop)
 static_assert(sizeof(PageHeader) == kPageHeaderSize, "PageHeader size mismatch");
