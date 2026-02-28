@@ -56,9 +56,6 @@ constexpr uint32_t kMaxAesKeySize  = 32;
 /// SHA-256 digest size in bytes.
 constexpr uint32_t kSha256Size = 32;
 
-/// xxHash seed used for CRC-style page integrity checks.
-constexpr uint64_t kPageHashSeed = 0xDEADBEEFCAFEBABEull;
-
 // ---------------------------------------------------------------------------
 // B+ Tree defaults
 // ---------------------------------------------------------------------------

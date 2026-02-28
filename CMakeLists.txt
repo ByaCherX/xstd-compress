@@ -35,15 +35,16 @@ set(SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src")
 set(PACKAGE_DIR "${SRC_DIR}/packages")
 set(TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests")
 
-add_library(Xstd
-    ${SRC_DIR}/hasher.cc
-    ${SRC_DIR}/page_manager.cc
+add_library(Xstd SHARED
+    ${SRC_DIR}/archive_reader.cc
+    ${SRC_DIR}/archive_writer.cc
+    ${SRC_DIR}/catalog.cc
     ${SRC_DIR}/compression.cc
     ${SRC_DIR}/encryption.cc
+    ${SRC_DIR}/page_manager.cc
     ${SRC_DIR}/sha256.cc
-    ${SRC_DIR}/catalog.cc
-    ${SRC_DIR}/archive_writer.cc
-    ${SRC_DIR}/archive_reader.cc
+
+    
 )
 
 target_link_libraries(Xstd PUBLIC
