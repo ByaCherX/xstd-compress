@@ -8,10 +8,11 @@
 //   opts.key = my_32_byte_key;   // if archive is encrypted
 //
 //   ArchiveReader reader("archive.xstd", opts);
-//   reader.Open();
+//   if (auto err = reader.Open(); err != (kSuccess)) { /* handle */ }
 //
 //   auto files = reader.ListFiles();          // all file paths
-//   auto data  = reader.ExtractFile("docs/readme.txt");
+//   std::vector<uint8_t> data;
+//   reader.ExtractFile("docs/readme.txt", data);
 //   reader.ExtractFileToDisk("data/input.csv", "/tmp/input.csv");
 //
 // LRU page cache reduces I/O for repeated reads of the same pages.
@@ -25,6 +26,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "xstd_errors.h"
 #include "compression.h"
 #include "encryption.h"
 #include "constants.h"
@@ -56,7 +58,7 @@ public:
     ArchiveReader(const ArchiveReader&)            = delete;
     ArchiveReader& operator=(const ArchiveReader&) = delete;
 
-    void Open();
+    [[nodiscard]] XSTD_Result Open();
     void Close() { file_.close(); lru_cache_.clear(); lru_order_.clear(); }
 
     // -- List --
@@ -66,9 +68,10 @@ public:
     [[nodiscard]] std::optional<FileMetadata>   Stat(const std::string& archive_path) const;
 
     // -- Extract --
-    [[nodiscard]] std::vector<uint8_t> ExtractFile(const std::string& archive_path);
-    void ExtractFileToDisk(const std::string&           archive_path,
-                           const std::filesystem::path& dest);
+    [[nodiscard]] XSTD_Result ExtractFile(const std::string& archive_path,
+                                           std::vector<uint8_t>& out);
+    [[nodiscard]] XSTD_Result ExtractFileToDisk(const std::string&           archive_path,
+                                                 const std::filesystem::path& dest);
 
     // -- Soft-delete recovery --
     /// Returns the data of a logically-deleted file, or std::nullopt if not found / unrecoverable.

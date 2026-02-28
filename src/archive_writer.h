@@ -7,10 +7,11 @@
 //   ArchiveWriterOptions opts;
 //   opts.page_size    = PageSize::PAGE_64K;
 //   opts.codec        = CompressionCodec(CompressionType::ZSTD, CompressionLevel::XSTD_greedy);
-//   opts.encryption   = EncryptionAlgorithm::AES_GCM_V1;
+//   opts.encryption   = ArchiveEncryption::Make(EncryptionAlgorithm::AES_GCM_V1, AesKeySize::AES_256);
 //   opts.key          = my_32_byte_key;
 //
 //   ArchiveWriter writer("archive.xstd", opts);
+//   if (auto err = writer.Init(); err != (kSuccess)) { /* handle */ }
 //   writer.AddFile("docs/readme.txt", file_bytes);
 //   writer.AddFile("data/input.csv",  csv_bytes);
 //   writer.Finalise();   // writes catalog + footer, closes file
@@ -25,6 +26,7 @@
 #include <string>
 #include <vector>
 
+#include "xstd_errors.h"
 #include "compression.h"
 #include "encryption.h"
 #include "metadata.h"
@@ -61,29 +63,36 @@ public:
     ArchiveWriter(const ArchiveWriter&)            = delete;
     ArchiveWriter& operator=(const ArchiveWriter&) = delete;
 
+    /// Opens the archive file and writes the archive header.
+    /// Must be called before any AddFile / DeleteFile / Finalise calls.
+    [[nodiscard]] XSTD_Result Init();
+
     /// Add a file from a memory buffer.
-    void AddFile(const std::string&       archive_path,
-                 std::span<const uint8_t> data);
+    [[nodiscard]] XSTD_Result AddFile(const std::string&       archive_path,
+                                       std::span<const uint8_t> data);
 
     /// Add a file from a std::vector (convenience overload).
-    void AddFile(const std::string& archive_path, const std::vector<uint8_t>& data) {
-        AddFile(archive_path, std::span<const uint8_t>(data));
+    [[nodiscard]] XSTD_Result AddFile(const std::string& archive_path,
+                                       const std::vector<uint8_t>& data) {
+        return AddFile(archive_path, std::span<const uint8_t>(data));
     }
 
     /// Add a file from disk.
-    void AddFileFromDisk(const std::filesystem::path& source,
-                         const std::string&           archive_path);
+    [[nodiscard]] XSTD_Result AddFileFromDisk(const std::filesystem::path& source,
+                                               const std::string&           archive_path);
 
     /// Logically delete a previously-added file.
     /// Marks the file's catalog entry and each of its page headers on disk as deleted.
-    /// Returns false if the file was not found.
+    /// Returns kFileNotFound if the file was not found.
+    /// Returns kSuccess if the file was (or was already) deleted.
     /// Physical data is preserved; use ArchiveReader::RecoverFile() to restore.
-    bool DeleteFile(const std::string& archive_path);
+    [[nodiscard]] XSTD_Result DeleteFile(const std::string& archive_path);
 
     /// Writes catalog + footer, flushes and closes the archive.
-    void Finalise();
+    [[nodiscard]] XSTD_Result Finalise();
 
 private:
+    std::filesystem::path        path_;
     ArchiveWriterOptions         opts_;
     std::ofstream                file_;
     std::unique_ptr<ICompressor> compressor_;

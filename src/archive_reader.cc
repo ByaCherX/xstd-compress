@@ -4,11 +4,10 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 #include "sha256.h"
-
-#define XXH_INLINE_ALL
-#include "packages/xxhash/xxhash.h"
+#include "xxhasher.h"
 
 namespace xstd {
 
@@ -24,13 +23,35 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& path,
 // Open
 // ---------------------------------------------------------------------------
 
-void ArchiveReader::Open() {
+XSTD_Result ArchiveReader::Open() {
     file_.open(path_, std::ios::binary);
     if (!file_.is_open())
-        throw std::runtime_error("ArchiveReader: cannot open file: " + path_.string());
+        return XSTD_returnError(kCannotOpenFile);
 
-    ReadAndValidateHeader();
-    ReadAndValidateCatalog();
+    try {
+        ReadAndValidateHeader();
+    } catch (...) {
+        file_.close();
+        return XSTD_returnError(kInvalidArchive);
+    }
+
+    try {
+        ReadAndValidateCatalog();
+    } catch (const std::runtime_error& e) {
+        file_.close();
+        std::string_view msg(e.what());
+        if (msg.find("no key") != std::string_view::npos ||
+            msg.find("encrypted") != std::string_view::npos)
+            return XSTD_returnError(kDecryptionFailed);
+        if (msg.find("unsupported") != std::string_view::npos)
+            return XSTD_returnError(kUnsupportedAlgorithm);
+        return XSTD_returnError(kInvalidArchive);
+    } catch (...) {
+        file_.close();
+        return XSTD_returnError(kIOError);
+    }
+
+    return XSTD_returnSuccess();
 }
 
 // ---------------------------------------------------------------------------
@@ -69,17 +90,38 @@ std::optional<FileMetadata> ArchiveReader::Stat(const std::string& archive_path)
 // Extract
 // ---------------------------------------------------------------------------
 
-std::vector<uint8_t> ArchiveReader::ExtractFile(const std::string& archive_path) {
+XSTD_Result ArchiveReader::ExtractFile(const std::string& archive_path,
+                                        std::vector<uint8_t>& out)
+{
     auto opt_meta = catalog_.Find(archive_path);
     if (!opt_meta || opt_meta->deleted)
-        throw std::runtime_error("ArchiveReader: file not found: " + archive_path);
-    return AssembleFile(*opt_meta);
+        return XSTD_returnError(kFileNotFound);
+
+    try {
+        out = AssembleFile(*opt_meta);
+    } catch (const std::runtime_error& e) {
+        std::string_view msg(e.what());
+        if (msg.find("CRC") != std::string_view::npos ||
+            msg.find("SHA-256") != std::string_view::npos)
+            return XSTD_returnError(kChecksumMismatch);
+        if (msg.find("no key") != std::string_view::npos ||
+            msg.find("encrypted") != std::string_view::npos ||
+            msg.find("authentication") != std::string_view::npos)
+            return XSTD_returnError(kDecryptionFailed);
+        return XSTD_returnError(kIOError);
+    } catch (...) {
+        return XSTD_returnError(kIOError);
+    }
+
+    return XSTD_returnSuccess();
 }
 
-void ArchiveReader::ExtractFileToDisk(const std::string&           archive_path,
-                                      const std::filesystem::path& dest)
+XSTD_Result ArchiveReader::ExtractFileToDisk(const std::string&           archive_path,
+                                              const std::filesystem::path& dest)
 {
-    auto data = ExtractFile(archive_path);
+    std::vector<uint8_t> data;
+    if (auto err = ExtractFile(archive_path, data); err != kSuccess)
+        return err;
 
     // Ensure parent directories exist.
     if (dest.has_parent_path())
@@ -87,9 +129,16 @@ void ArchiveReader::ExtractFileToDisk(const std::string&           archive_path,
 
     std::ofstream out(dest, std::ios::binary);
     if (!out.is_open())
-        throw std::runtime_error("ArchiveReader: cannot write to: " + dest.string());
-    out.write(reinterpret_cast<const char*>(data.data()),
-              static_cast<std::streamsize>(data.size()));
+        return XSTD_returnError(kCannotWriteFile);
+
+    try {
+        out.write(reinterpret_cast<const char*>(data.data()),
+                  static_cast<std::streamsize>(data.size()));
+    } catch (...) {
+        return XSTD_returnError(kIOError);
+    }
+
+    return XSTD_returnSuccess();
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +251,7 @@ const std::vector<uint8_t>& ArchiveReader::ReadPage(const PageHeader& ph) {
     // Verify CRC over compressed plaintext.
     {
         const uint64_t expected_crc = static_cast<uint64_t>(ph.crc32);
-        const uint64_t actual_crc   = XXH64(plaintext.data(), plaintext.size(), kPageHashSeed) & 0xFFFF'FFFF;
+        const uint64_t actual_crc   = XXHasher::Hash(plaintext.data(), plaintext.size()) & 0xFFFF'FFFF;
         if (actual_crc != expected_crc)
             throw std::runtime_error("ArchiveReader: CRC mismatch on page_id="
                                      + std::to_string(ph.page_id));
