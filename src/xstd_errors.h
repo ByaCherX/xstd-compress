@@ -84,27 +84,11 @@ inline const char* XSTD_ErrorCode_toString(XSTD_Result res)
             return "Success";
         case kGENERIC:              
             return "GENERIC";
-        case kInvalidArgument:      
-            return "InvalidArgument";
-        case kAlreadyFinalised:     
-            return "AlreadyFinalised";
-        case kCannotOpenFile:       
-            return "CannotOpenFile";
-        case kCannotWriteFile:      
-            return "CannotWriteFile";
-        case kFileNotFound:         
-            return "FileNotFound";
-        case kInvalidArchive:       
-            return "InvalidArchive";
-        case kDecryptionFailed:     
-            return "DecryptionFailed";
-        case kUnsupportedAlgorithm: 
-            return "UnsupportedAlgorithm";
-        case kChecksumMismatch:     
-            return "ChecksumMismatch";
-        case kIOError:              
-            return "IOError";
-        default:                                  
+        /* Compression */
+        case kCompressionFailed:
+            return "CompressionFailed: Compressor (e.g. ZSTD) failed to compress a page.";
+        case kDecompressionFailed:
+            return "DecompressionFailed: Decompressor (e.g. ZSTD) failed; data may be corrupt or truncated.";
             return "UnknownError";
     }
 }

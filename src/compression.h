@@ -29,16 +29,16 @@ public:
 
     /// Compress @p input into @p output.  Output is resized to fit exactly.
     /// @throws std::runtime_error on codec failure.
-    virtual void Compress(std::span<const uint8_t> input,
-                          std::vector<uint8_t>&    output) const = 0;
+    virtual XSTD_Result Compress(std::span<const uint8_t> input,
+                                 std::vector<uint8_t>&    output) const = 0;
 
     /// Decompress @p input (compressed bytes) into @p output.
     /// @p uncompressed_size hint allows single-pass allocation;
     ///    pass 0 if unknown (codec will manage internally).
     /// @throws std::runtime_error on corruption or truncated data.
-    virtual void Decompress(std::span<const uint8_t> input,
-                            std::vector<uint8_t>&    output,
-                            int32_t                  uncompressed_size) const = 0;
+    virtual XSTD_Result Decompress(std::span<const uint8_t> input,
+                                   std::vector<uint8_t>&    output,
+                                   int32_t                  uncompressed_size) const = 0;
 
     [[nodiscard]] virtual CompressionType Type() const noexcept = 0;
 };
@@ -48,15 +48,17 @@ public:
 // ---------------------------------------------------------------------------
 class NoopCompressor final : public ICompressor {
 public:
-    void Compress(std::span<const uint8_t> input,
-                  std::vector<uint8_t>&    output) const override {
+    XSTD_Result Compress(std::span<const uint8_t> input,
+                         std::vector<uint8_t>&    output) const override {
         output.assign(input.begin(), input.end());
+        return XSTD_returnSuccess();
     }
 
-    void Decompress(std::span<const uint8_t> input,
-                    std::vector<uint8_t>&    output,
-                    int32_t /*hint*/) const override {
+    XSTD_Result Decompress(std::span<const uint8_t> input,
+                           std::vector<uint8_t>&    output,
+                           int32_t /*hint*/) const override {
         output.assign(input.begin(), input.end());
+        return XSTD_returnSuccess();
     }
 
     [[nodiscard]] CompressionType Type() const noexcept override {
@@ -71,12 +73,12 @@ class ZstdCompressor final : public ICompressor {
 public:
     explicit ZstdCompressor(CompressionLevel level = CompressionLevel::XSTD_greedy);
 
-    void Compress(std::span<const uint8_t> input,
-                  std::vector<uint8_t>&    output) const override;
+    XSTD_Result Compress(std::span<const uint8_t> input,
+                         std::vector<uint8_t>&    output) const override;
 
-    void Decompress(std::span<const uint8_t> input,
-                    std::vector<uint8_t>&    output,
-                    int32_t                  uncompressed_size) const override;
+    XSTD_Result Decompress(std::span<const uint8_t> input,
+                           std::vector<uint8_t>&    output,
+                           int32_t                  uncompressed_size) const override;
 
     [[nodiscard]] CompressionType Type() const noexcept override {
         return CompressionType::ZSTD;
@@ -91,7 +93,7 @@ private:
 // CompressorFactory
 // ---------------------------------------------------------------------------
 struct CompressorFactory {
-    [[nodiscard]] static std::unique_ptr<ICompressor> Create(CompressionCodec codec);
+    [[nodiscard]] static std::unique_ptr<ICompressor> Create(CompressionCodec codec) noexcept;
 };
 
 } // namespace xstd

@@ -249,7 +249,9 @@ const std::vector<uint8_t>& ArchiveReader::ReadPage(const PageHeader& ph) {
     codec.raw = ph.compression_codec;
     std::unique_ptr<ICompressor> comp = CompressorFactory::Create(codec);
     std::vector<uint8_t> decompressed;
-    comp->Decompress(plaintext, decompressed, ph.uncompressed_size);
+    XSTD_Result result = comp->Decompress(plaintext, decompressed, ph.uncompressed_size);
+    if (XSTD_isError(result))
+        XSTD_THROW_ERROR_MSG(kDecompressionFailed, "decompression failed for page_id=" + std::to_string(ph.page_id));
 
     // Evict LRU entry if at capacity.
     if (lru_cache_.size() >= opts_.cache_capacity && opts_.cache_capacity > 0) {

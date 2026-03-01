@@ -1,4 +1,5 @@
 #include "compression.h"
+#include "xstd_errors.h"
 
 #include <stdexcept>
 #include <string>
@@ -35,8 +36,8 @@ int ZstdCompressor::ZstdLevel(CompressionLevel lvl) noexcept {
     return ToZstdLevel(lvl);
 }
 
-void ZstdCompressor::Compress(std::span<const uint8_t> input,
-                               std::vector<uint8_t>&    output) const {
+XSTD_Result ZstdCompressor::Compress(std::span<const uint8_t> input,
+                                     std::vector<uint8_t>&    output) const {
     const std::size_t bound = ZSTD_compressBound(input.size());
     output.resize(bound);
 
@@ -53,11 +54,12 @@ void ZstdCompressor::Compress(std::span<const uint8_t> input,
         return XSTD_returnError(kCompressionFailed);
 
     output.resize(result);
+    return XSTD_returnSuccess();
 }
 
-void ZstdCompressor::Decompress(std::span<const uint8_t> input,
-                                 std::vector<uint8_t>&    output,
-                                 int32_t                  uncompressed_size) const {
+XSTD_Result ZstdCompressor::Decompress(std::span<const uint8_t> input,
+                                       std::vector<uint8_t>&    output,
+                                       int32_t                  uncompressed_size) const {
     if (uncompressed_size > 0) {
         output.resize(static_cast<std::size_t>(uncompressed_size));
         const std::size_t result = ZSTD_decompress(
@@ -98,6 +100,7 @@ void ZstdCompressor::Decompress(std::span<const uint8_t> input,
         } while (ret != 0 && in_buf.pos < in_buf.size);
 
         ZSTD_freeDStream(stream);
+        return XSTD_returnSuccess();
     }
 }
 
@@ -112,7 +115,7 @@ std::unique_ptr<ICompressor> CompressorFactory::Create(CompressionCodec codec) {
         case CompressionType::ZSTD:
             return std::make_unique<ZstdCompressor>(codec.Level());
         default:
-            throw std::runtime_error("Unsupported compression type");
+            return std::make_unique<ZstdCompressor>(codec.Level());
     }
 }
 

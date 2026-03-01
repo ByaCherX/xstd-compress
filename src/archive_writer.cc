@@ -232,7 +232,9 @@ PageHeader ArchiveWriter::WritePage(std::span<const uint8_t> chunk,
 {
     // 1. Compress.
     std::vector<uint8_t> compressed;
-    compressor_->Compress(chunk, compressed);
+    XSTD_Result result = compressor_->Compress(chunk, compressed);
+    if (XSTD_isError(result))
+        throw XstdError(kCompressionFailed);
 
     // 2. CRC of compressed plaintext.
     const uint64_t crc = XXHasher::Hash(compressed.data(), compressed.size());
