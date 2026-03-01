@@ -1,7 +1,7 @@
 #include "catalog.h"
+#include "xstd_errors.h"
 
 #include <cstring>
-#include <stdexcept>
 
 namespace xstd {
 namespace {
@@ -29,9 +29,9 @@ void SerialiseKey(std::vector<uint8_t>& buf, const std::string& key) {
 
 // Deserialise string key from @p p, advance @p p by bytes consumed, up to @p end.
 std::string DeserialiseKey(const uint8_t*& p, const uint8_t* end) {
-    if (p + 4 > end) throw std::runtime_error("Catalog: truncated key length");
+    if (p + 4 > end) XSTD_THROW_ERROR_MSG(kInvalidArchive, "Catalog: truncated key length");
     uint32_t len = detail::ReadUint32(p); p += 4;
-    if (p + len > end) throw std::runtime_error("Catalog: truncated key data");
+    if (p + len > end) XSTD_THROW_ERROR_MSG(kInvalidArchive, "Catalog: truncated key data");
     std::string key(reinterpret_cast<const char*>(p), len);
     p += len;
     return key;
@@ -79,38 +79,38 @@ FileMetadata DeserialiseValue(const uint8_t*& p, const uint8_t* end) {
     FileMetadata m;
 
     // file_name
-    if (p + 4 > end) throw std::runtime_error("Catalog: truncated file_name length");
+    if (p + 4 > end) XSTD_THROW_ERROR_MSG(kInvalidArchive, "Catalog: truncated file_name length");
     uint32_t fn_len = detail::ReadUint32(p); p += 4;
-    if (p + fn_len > end) throw std::runtime_error("Catalog: truncated file_name");
+    if (p + fn_len > end) XSTD_THROW_ERROR_MSG(kInvalidArchive, "Catalog: truncated file_name");
     m.file_name.assign(reinterpret_cast<const char*>(p), fn_len);
     p += fn_len;
 
     // signature
-    if (p + 8 > end) throw std::runtime_error("Catalog: truncated signature");
+    if (p + 8 > end) XSTD_THROW_ERROR_MSG(kInvalidArchive, "Catalog: truncated signature");
     m.signature = ReadInt64(p); p += 8;
 
     // checksum
-    if (p + kSha256Size > end) throw std::runtime_error("Catalog: truncated checksum");
+    if (p + kSha256Size > end) XSTD_THROW_ERROR_MSG(kInvalidArchive, "Catalog: truncated checksum");
     std::copy(p, p + kSha256Size, m.checksum.begin());
     p += kSha256Size;
 
     // timestamps + original_size
-    if (p + 24 > end) throw std::runtime_error("Catalog: truncated timestamps");
+    if (p + 24 > end) XSTD_THROW_ERROR_MSG(kInvalidArchive, "Catalog: truncated timestamps");
     m.created_time       = ReadInt64(p); p += 8;
     m.last_modified_time = ReadInt64(p); p += 8;
     m.original_size      = ReadInt64(p); p += 8;
 
     // deleted flag
-    if (p + 1 > end) throw std::runtime_error("Catalog: truncated deleted flag");
+    if (p + 1 > end) XSTD_THROW_ERROR_MSG(kInvalidArchive, "Catalog: truncated deleted flag");
     m.deleted = (*p++ != 0);
 
     // pages
-    if (p + 4 > end) throw std::runtime_error("Catalog: truncated num_pages");
+    if (p + 4 > end) XSTD_THROW_ERROR_MSG(kInvalidArchive, "Catalog: truncated num_pages");
     uint32_t num_pages = detail::ReadUint32(p); p += 4;
     m.pages.resize(num_pages);
     for (uint32_t i = 0; i < num_pages; ++i) {
         if (p + kPageHeaderSize > end)
-            throw std::runtime_error("Catalog: truncated PageHeader");
+            XSTD_THROW_ERROR_MSG(kInvalidArchive, "Catalog: truncated PageHeader");
         std::memcpy(&m.pages[i], p, kPageHeaderSize);
         p += kPageHeaderSize;
     }

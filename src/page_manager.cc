@@ -1,4 +1,5 @@
 #include "page_manager.h"
+#include "xstd_errors.h"
 
 #include <stdexcept>
 #include <string>
@@ -7,7 +8,7 @@ namespace xstd {
 
 PageManager::PageManager(int32_t initial_capacity) {
     if (initial_capacity < 0)
-        throw std::invalid_argument("capacity must be >= 0");
+        XSTD_THROW_ERROR_MSG(kInvalidArgument, "PageManager capacity must be >= 0");
     Resize(initial_capacity);
 }
 
@@ -29,12 +30,12 @@ int32_t PageManager::Allocate() {
 }
 
 void PageManager::AllocateAt(int32_t id) {
-    if (id < 0) throw std::invalid_argument("page id must be >= 0");
+    if (id < 0) XSTD_THROW_ERROR_MSG(kInvalidArgument, "page id must be >= 0");
     EnsureCapacity(id + 1);
     std::size_t word = static_cast<std::size_t>(id) / 64;
     int         bit  = id % 64;
     if (bitmap_[word] & (uint64_t{1} << bit))
-        throw std::runtime_error("page already allocated: " + std::to_string(id));
+        XSTD_THROW_ERROR_MSG(kGENERIC, "page already allocated: " + std::to_string(id));
     bitmap_[word] |= (uint64_t{1} << bit);
     if (id >= page_count_) page_count_ = id + 1;
 }
@@ -72,7 +73,7 @@ std::vector<uint8_t> PageManager::Serialise() const {
 
 void PageManager::Deserialise(std::span<const uint8_t> data) {
     if (data.size() % 8 != 0)
-        throw std::runtime_error("bitmap data size must be a multiple of 8");
+        XSTD_THROW_ERROR_MSG(kInvalidArgument, "PageManager bitmap data size must be a multiple of 8");
     bitmap_.resize(data.size() / 8);
     for (std::size_t i = 0; i < bitmap_.size(); ++i) {
         uint64_t w = 0;

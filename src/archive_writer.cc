@@ -170,12 +170,16 @@ XSTD_Result ArchiveWriter::Finalise() {
 
 void ArchiveWriter::ValidateOptions() const {
     if (opts_.encryption.IsEncrypted()) {
-        if (opts_.key.size() >= 32 || opts_.key.size() == 0)
-            throw std::invalid_argument(
-                "ArchiveWriter: key size does not match the key size encoded in encryption option");
+        // Key size must exactly match what is encoded in the encryption descriptor.
+        const std::size_t expected_key_bytes =
+            static_cast<std::size_t>(opts_.encryption.GetKeySize());
+        if (opts_.key.size() != expected_key_bytes)
+            XSTD_THROW_ERROR_MSG(kInvalidArgument,
+                "encryption key must be " + std::to_string(expected_key_bytes)
+                + " bytes but got " + std::to_string(opts_.key.size()));
         if (opts_.encryption.GetAlgorithm() == EncryptionAlgorithm::NONE)
-            throw std::invalid_argument(
-                "ArchiveWriter: encryption algorithm is NONE but encryption is enabled");
+            XSTD_THROW_ERROR_MSG(kInvalidArgument,
+                "encryption algorithm is NONE but the encrypted flag is set");
     }
 }
 

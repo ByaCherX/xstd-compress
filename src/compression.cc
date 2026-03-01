@@ -46,8 +46,11 @@ void ZstdCompressor::Compress(std::span<const uint8_t> input,
         level_);
 
     if (ZSTD_isError(result))
-        throw std::runtime_error(
+        #ifdef XSTD_ENABLE_DIRECT_THROW
+        XSTD_THROW_ERROR_MSG(kCompressionFailed,
             std::string("ZSTD compress error: ") + ZSTD_getErrorName(result));
+        #endif
+        return XSTD_returnError(kCompressionFailed);
 
     output.resize(result);
 }
@@ -61,13 +64,16 @@ void ZstdCompressor::Decompress(std::span<const uint8_t> input,
             output.data(), output.size(),
             input.data(), input.size());
         if (ZSTD_isError(result))
-            throw std::runtime_error(
+            #ifdef XSTD_ENABLE_DIRECT_THROW
+            XSTD_THROW_ERROR_MSG(kDecompressionFailed,
                 std::string("ZSTD decompress error: ") + ZSTD_getErrorName(result));
+            #endif
+            return XSTD_returnError(kDecompressionFailed);
         output.resize(result);
     } else {
         // Unknown size — use streaming decompress.
         ZSTD_DStream* stream = ZSTD_createDStream();
-        if (!stream) throw std::runtime_error("ZSTD_createDStream failed");
+        if (!stream) XSTD_returnError(kDecompressionFailed);
 
         ZSTD_initDStream(stream);
         output.clear();
@@ -82,8 +88,11 @@ void ZstdCompressor::Decompress(std::span<const uint8_t> input,
             ret = ZSTD_decompressStream(stream, &out_buf, &in_buf);
             if (ZSTD_isError(ret)) {
                 ZSTD_freeDStream(stream);
-                throw std::runtime_error(
+                #ifdef XSTD_ENABLE_DIRECT_THROW
+                XSTD_THROW_ERROR_MSG(kGENERIC,
                     std::string("ZSTD decompress error: ") + ZSTD_getErrorName(ret));
+                #endif
+                return XSTD_returnError(kDecompressionFailed);
             }
             output.insert(output.end(), chunk.begin(), chunk.begin() + out_buf.pos);
         } while (ret != 0 && in_buf.pos < in_buf.size);

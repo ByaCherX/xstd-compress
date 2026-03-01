@@ -139,6 +139,61 @@ inline const char* XSTD_ErrorCode_toString(XSTD_Result res)
             throw std::runtime_error(XSTD_ErrorCode_toString(_xstd_r));    \
     } while (0)
 
+/*
+ * XSTD_REPORT_ERROR(errCode)
+ *   Convenience wrapper: returns an XSTD_Result carrying `errCode`.
+ *   Must be used inside a function whose return type is XSTD_Result.
+ */
+#define XSTD_REPORT_ERROR(errCode) \
+    return XSTD_returnError(errCode)
+
+/*-*********************************************
+ *  XstdError — typed exception for structured error propagation
+ *-*********************************************
+ *
+ * Thrown by internal helpers so that the public API boundary can catch
+ * a single type and extract the XSTD_ErrorCode without string inspection.
+ *
+ * Construction:
+ *   throw XstdError(kChecksumMismatch);
+ *   throw XstdError(kInvalidArgument, "key must be 32 bytes");
+ *
+ * Macros:
+ *   XSTD_THROW_ERROR(errCode)          — throw XstdError(errCode)
+ *   XSTD_THROW_ERROR_MSG(errCode, msg) — throw XstdError(errCode, msg)
+ */
+class XstdError : public std::runtime_error {
+public:
+    explicit XstdError(XSTD_ErrorCode code)
+        : std::runtime_error(XSTD_ErrorCode_toString(
+              static_cast<XSTD_Result>(code)))
+        , code_(code) {}
+
+    XstdError(XSTD_ErrorCode code, const std::string& detail)
+        : std::runtime_error(
+              std::string(XSTD_ErrorCode_toString(
+                  static_cast<XSTD_Result>(code))) + " — " + detail)
+        , code_(code) {}
+
+    [[nodiscard]] XSTD_ErrorCode code() const noexcept { return code_; }
+
+private:
+    XSTD_ErrorCode code_;
+};
+
+/*
+ * XSTD_THROW_ERROR(errCode)
+ *   Throw a typed XstdError carrying `errCode`.
+ *
+ * XSTD_THROW_ERROR_MSG(errCode, msg)
+ *   Throw a typed XstdError with an additional detail string.
+ */
+#define XSTD_THROW_ERROR(errCode) \
+    throw ::xstd::XstdError(errCode)
+
+#define XSTD_THROW_ERROR_MSG(errCode, msg) \
+    throw ::xstd::XstdError((errCode), (msg))
+
 } // namespace xstd
 
 #endif

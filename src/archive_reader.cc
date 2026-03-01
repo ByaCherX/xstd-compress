@@ -30,6 +30,9 @@ XSTD_Result ArchiveReader::Open() {
 
     try {
         ReadAndValidateHeader();
+    } catch (const XstdError& e) {
+        file_.close();
+        return XSTD_returnError(e.code());
     } catch (...) {
         file_.close();
         return XSTD_returnError(kInvalidArchive);
@@ -37,15 +40,9 @@ XSTD_Result ArchiveReader::Open() {
 
     try {
         ReadAndValidateCatalog();
-    } catch (const std::runtime_error& e) {
+    } catch (const XstdError& e) {
         file_.close();
-        std::string_view msg(e.what());
-        if (msg.find("no key") != std::string_view::npos ||
-            msg.find("encrypted") != std::string_view::npos)
-            return XSTD_returnError(kDecryptionFailed);
-        if (msg.find("unsupported") != std::string_view::npos)
-            return XSTD_returnError(kUnsupportedAlgorithm);
-        return XSTD_returnError(kInvalidArchive);
+        return XSTD_returnError(e.code());
     } catch (...) {
         file_.close();
         return XSTD_returnError(kIOError);
@@ -99,16 +96,8 @@ XSTD_Result ArchiveReader::ExtractFile(const std::string& archive_path,
 
     try {
         out = AssembleFile(*opt_meta);
-    } catch (const std::runtime_error& e) {
-        std::string_view msg(e.what());
-        if (msg.find("CRC") != std::string_view::npos ||
-            msg.find("SHA-256") != std::string_view::npos)
-            return XSTD_returnError(kChecksumMismatch);
-        if (msg.find("no key") != std::string_view::npos ||
-            msg.find("encrypted") != std::string_view::npos ||
-            msg.find("authentication") != std::string_view::npos)
-            return XSTD_returnError(kDecryptionFailed);
-        return XSTD_returnError(kIOError);
+    } catch (const XstdError& e) {
+        return XSTD_returnError(e.code());
     } catch (...) {
         return XSTD_returnError(kIOError);
     }
@@ -149,9 +138,9 @@ void ArchiveReader::ReadAndValidateHeader() {
     file_.seekg(0, std::ios::beg);
     file_.read(reinterpret_cast<char*>(&header_), sizeof(header_));
     if (file_.gcount() != sizeof(header_))
-        throw std::runtime_error("ArchiveReader: cannot read archive header");
+        XSTD_THROW_ERROR_MSG(kInvalidArchive, "cannot read archive header — file may be truncated");
     if (header_.magic != kMagic)
-        throw std::runtime_error("ArchiveReader: invalid magic number — not an Xstd archive");
+        XSTD_THROW_ERROR_MSG(kInvalidArchive, "invalid magic number — not an Xstd archive");
 }
 
 // ---------------------------------------------------------------------------
@@ -168,7 +157,7 @@ void ArchiveReader::ReadAndValidateCatalog() {
     if (header_.encryption.IsEncrypted()) {
         footer_enc = EncryptorFactory::Create(header_.encryption.GetAlgorithm());
         if (!footer_enc)
-            throw std::runtime_error("ArchiveReader: unsupported encryption algorithm in header");
+            XSTD_THROW_ERROR_MSG(kUnsupportedAlgorithm, "unsupported encryption algorithm in archive header");
         footer_stored_size = static_cast<std::streamsize>(
             footer_enc->IvSize() + sizeof(ArchiveFooter) + footer_enc->TagSize());
     }
@@ -178,23 +167,23 @@ void ArchiveReader::ReadAndValidateCatalog() {
     std::vector<uint8_t> footer_raw(static_cast<std::size_t>(footer_stored_size));
     file_.read(reinterpret_cast<char*>(footer_raw.data()), footer_stored_size);
     if (file_.gcount() != footer_stored_size)
-        throw std::runtime_error("ArchiveReader: cannot read archive footer");
+        XSTD_THROW_ERROR_MSG(kInvalidArchive, "cannot read archive footer — file may be truncated");
 
     // Decrypt footer if needed.
     ArchiveFooter footer{};
     if (footer_enc) {
         if (opts_.key.empty())
-            throw std::runtime_error("ArchiveReader: archive footer is encrypted but no key provided");
+            XSTD_THROW_ERROR_MSG(kMissingEncryptionKey, "archive is encrypted but no decryption key was provided");
         auto plain = footer_enc->Decrypt(footer_raw, opts_.key);
         if (plain.size() != sizeof(ArchiveFooter))
-            throw std::runtime_error("ArchiveReader: decrypted footer has unexpected size");
+            XSTD_THROW_ERROR_MSG(kDecryptionFailed, "decrypted footer has unexpected size — key may be wrong");
         std::memcpy(&footer, plain.data(), sizeof(ArchiveFooter));
     } else {
         std::memcpy(&footer, footer_raw.data(), sizeof(ArchiveFooter));
     }
 
     if (footer.footer_magic != kFooterMagic)
-        throw std::runtime_error("ArchiveReader: invalid footer magic — archive may be truncated");
+        XSTD_THROW_ERROR_MSG(kInvalidArchive, "invalid footer magic — archive may be truncated or corrupted");
 
     // Read catalog bytes.
     file_.seekg(footer.catalog_offset, std::ios::beg);
@@ -202,12 +191,12 @@ void ArchiveReader::ReadAndValidateCatalog() {
     file_.read(reinterpret_cast<char*>(cat_buf.data()),
                static_cast<std::streamsize>(cat_buf.size()));
     if (file_.gcount() != static_cast<std::streamsize>(cat_buf.size()))
-        throw std::runtime_error("ArchiveReader: catalog region truncated");
+        XSTD_THROW_ERROR_MSG(kCatalogCorrupted, "catalog region truncated — archive may be corrupted");
 
     catalog_.Deserialise(cat_buf);
 
     if (static_cast<std::size_t>(footer.num_files) != catalog_.FileCount())
-        throw std::runtime_error("ArchiveReader: catalog file count mismatch");
+        XSTD_THROW_ERROR_MSG(kCatalogCorrupted, "catalog file count mismatch — archive may be corrupted");
 }
 
 // ---------------------------------------------------------------------------
@@ -230,19 +219,18 @@ const std::vector<uint8_t>& ArchiveReader::ReadPage(const PageHeader& ph) {
     file_.read(reinterpret_cast<char*>(raw.data()),
                static_cast<std::streamsize>(raw.size()));
     if (file_.gcount() != static_cast<std::streamsize>(raw.size()))
-        throw std::runtime_error("ArchiveReader: page data truncated (page_id="
-                                 + std::to_string(ph.page_id) + ")");
+        XSTD_THROW_ERROR_MSG(kIOError, "page data truncated (page_id=" + std::to_string(ph.page_id) + ")");
 
     // Decrypt if needed, then verify CRC.
     // CRC is always computed over the compressed plaintext (post-decryption).
     std::vector<uint8_t> plaintext;
     if (ph.IsEncrypted()) {
         if (opts_.key.empty())
-            throw std::runtime_error("ArchiveReader: page is encrypted but no key provided");
+            XSTD_THROW_ERROR_MSG(kMissingEncryptionKey, "page is encrypted but no decryption key was provided");
         const EncryptionAlgorithm alg = header_.encryption.GetAlgorithm();
         auto enc = EncryptorFactory::Create(alg);
         if (!enc)
-            throw std::runtime_error("ArchiveReader: unsupported encryption algorithm");
+            XSTD_THROW_ERROR_MSG(kUnsupportedAlgorithm, "unsupported encryption algorithm in page header");
         plaintext = enc->Decrypt(raw, opts_.key);
     } else {
         plaintext = std::move(raw);
@@ -253,8 +241,7 @@ const std::vector<uint8_t>& ArchiveReader::ReadPage(const PageHeader& ph) {
         const uint64_t expected_crc = static_cast<uint64_t>(ph.crc32);
         const uint64_t actual_crc   = XXHasher::Hash(plaintext.data(), plaintext.size()) & 0xFFFF'FFFF;
         if (actual_crc != expected_crc)
-            throw std::runtime_error("ArchiveReader: CRC mismatch on page_id="
-                                     + std::to_string(ph.page_id));
+            XSTD_THROW_ERROR_MSG(kChecksumMismatch, "CRC mismatch on page_id=" + std::to_string(ph.page_id));
     }
 
     // Decompress.
@@ -293,8 +280,8 @@ std::vector<uint8_t> ArchiveReader::AssembleFile(const FileMetadata& meta) {
     // Verify SHA-256 checksum.
     auto computed = Sha256::Hash(result);
     if (computed != meta.checksum)
-        throw std::runtime_error("ArchiveReader: SHA-256 mismatch for file: "
-                                 + meta.file_name + " — data may be corrupted");
+        XSTD_THROW_ERROR_MSG(kChecksumMismatch,
+            "SHA-256 mismatch for '" + meta.file_name + "' — data may be corrupted");
 
     return result;
 }

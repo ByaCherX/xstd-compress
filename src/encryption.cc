@@ -1,4 +1,5 @@
 #include "encryption.h"
+#include "xstd_errors.h"
 
 #include <array>
 #include <stdexcept>
@@ -20,7 +21,7 @@ using EvpCtxPtr = std::unique_ptr<EVP_CIPHER_CTX, EvpCtxDeleter>;
 
 static EvpCtxPtr MakeCtx() {
     EvpCtxPtr ctx{EVP_CIPHER_CTX_new()};
-    if (!ctx) throw std::runtime_error("EVP_CIPHER_CTX_new failed");
+    if (!ctx) XSTD_THROW_ERROR_MSG(kGENERIC, "EVP_CIPHER_CTX_new failed");
     return ctx;
 }
 
@@ -30,7 +31,7 @@ static const EVP_CIPHER* AesGcmCipher(std::size_t key_len) {
         case 16: return EVP_aes_128_gcm();
         case 24: return EVP_aes_192_gcm();
         case 32: return EVP_aes_256_gcm();
-        default: throw std::runtime_error("Invalid AES key length for GCM");
+        default: XSTD_THROW_ERROR_MSG(kInvalidArgument, "Invalid AES key length for GCM (must be 16, 24, or 32 bytes)");
     }
 }
 
@@ -40,14 +41,14 @@ static const EVP_CIPHER* AesCtrCipher(std::size_t key_len) {
         case 16: return EVP_aes_128_ctr();
         case 24: return EVP_aes_192_ctr();
         case 32: return EVP_aes_256_ctr();
-        default: throw std::runtime_error("Invalid AES key length for CTR");
+        default: XSTD_THROW_ERROR_MSG(kInvalidArgument, "Invalid AES key length for CTR (must be 16, 24, or 32 bytes)");
     }
 }
 
 // Fills @p buf with @p len cryptographically-random bytes via OpenSSL RAND.
 static void RandomBytes(uint8_t* buf, int len) {
     if (RAND_bytes(buf, len) != 1)
-        throw std::runtime_error("RAND_bytes failed");
+        XSTD_THROW_ERROR_MSG(kIOError, "RAND_bytes failed — OpenSSL PRNG failure");
 }
 
 } // anonymous namespace
@@ -69,19 +70,19 @@ std::vector<uint8_t> AesGcmEncryptor::Encrypt(
     const EVP_CIPHER* cipher = AesGcmCipher(key.size());
 
     if (EVP_EncryptInit_ex(ctx.get(), cipher, nullptr, nullptr, nullptr) != 1)
-        throw std::runtime_error("AES-GCM EncryptInit (cipher) failed");
+        XSTD_THROW_ERROR_MSG(kGENERIC, "AES-GCM EncryptInit (cipher) failed");
     if (EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_IVLEN,
                              static_cast<int>(iv.size()), nullptr) != 1)
-        throw std::runtime_error("AES-GCM set IV len failed");
+        XSTD_THROW_ERROR_MSG(kGENERIC, "AES-GCM set IV len failed");
     if (EVP_EncryptInit_ex(ctx.get(), nullptr, nullptr, key.data(), iv.data()) != 1)
-        throw std::runtime_error("AES-GCM EncryptInit (key+iv) failed");
+        XSTD_THROW_ERROR_MSG(kGENERIC, "AES-GCM EncryptInit (key+iv) failed");
 
     // Feed AAD if present.
     if (!aad.empty()) {
         int dummy = 0;
         if (EVP_EncryptUpdate(ctx.get(), nullptr, &dummy,
                               aad.data(), static_cast<int>(aad.size())) != 1)
-            throw std::runtime_error("AES-GCM AAD update failed");
+            XSTD_THROW_ERROR_MSG(kGENERIC, "AES-GCM AAD update failed");
     }
 
     // Encrypt plaintext. Output = [IV][ciphertext][tag].
@@ -94,19 +95,19 @@ std::vector<uint8_t> AesGcmEncryptor::Encrypt(
     if (EVP_EncryptUpdate(ctx.get(),
                           out.data() + kAesGcmIvSize, &ct_len,
                           plaintext.data(), static_cast<int>(plaintext.size())) != 1)
-        throw std::runtime_error("AES-GCM EncryptUpdate failed");
+        XSTD_THROW_ERROR_MSG(kGENERIC, "AES-GCM EncryptUpdate failed");
 
     int final_len = 0;
     if (EVP_EncryptFinal_ex(ctx.get(),
                              out.data() + kAesGcmIvSize + ct_len, &final_len) != 1)
-        throw std::runtime_error("AES-GCM EncryptFinal failed");
+        XSTD_THROW_ERROR_MSG(kGENERIC, "AES-GCM EncryptFinal failed");
     out.resize(kAesGcmIvSize + static_cast<std::size_t>(ct_len + final_len));
 
     // Append auth tag.
     std::array<uint8_t, kAesGcmTagSize> tag{};
     if (EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_GET_TAG,
                              static_cast<int>(tag.size()), tag.data()) != 1)
-        throw std::runtime_error("AES-GCM get tag failed");
+        XSTD_THROW_ERROR_MSG(kGENERIC, "AES-GCM get tag failed");
     out.insert(out.end(), tag.begin(), tag.end());
     return out;
 }
@@ -118,7 +119,7 @@ std::vector<uint8_t> AesGcmEncryptor::Decrypt(
 {
     const std::size_t min_size = kAesGcmIvSize + kAesGcmTagSize;
     if (ciphertext_with_iv.size() < min_size)
-        throw std::runtime_error("AES-GCM ciphertext too short");
+        XSTD_THROW_ERROR_MSG(kInvalidArgument, "AES-GCM ciphertext too short");
 
     const uint8_t* iv  = ciphertext_with_iv.data();
     const std::size_t ct_len = ciphertext_with_iv.size() - kAesGcmIvSize - kAesGcmTagSize;
@@ -129,36 +130,36 @@ std::vector<uint8_t> AesGcmEncryptor::Decrypt(
     const EVP_CIPHER* cipher = AesGcmCipher(key.size());
 
     if (EVP_DecryptInit_ex(ctx.get(), cipher, nullptr, nullptr, nullptr) != 1)
-        throw std::runtime_error("AES-GCM DecryptInit (cipher) failed");
+        XSTD_THROW_ERROR_MSG(kGENERIC, "AES-GCM DecryptInit (cipher) failed");
     if (EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_IVLEN,
                              static_cast<int>(kAesGcmIvSize), nullptr) != 1)
-        throw std::runtime_error("AES-GCM set IV len failed");
+        XSTD_THROW_ERROR_MSG(kGENERIC, "AES-GCM set IV len failed");
     if (EVP_DecryptInit_ex(ctx.get(), nullptr, nullptr, key.data(), iv) != 1)
-        throw std::runtime_error("AES-GCM DecryptInit (key+iv) failed");
+        XSTD_THROW_ERROR_MSG(kGENERIC, "AES-GCM DecryptInit (key+iv) failed");
 
     if (!aad.empty()) {
         int dummy = 0;
         if (EVP_DecryptUpdate(ctx.get(), nullptr, &dummy,
                               aad.data(), static_cast<int>(aad.size())) != 1)
-            throw std::runtime_error("AES-GCM AAD update failed");
+            XSTD_THROW_ERROR_MSG(kGENERIC, "AES-GCM AAD update failed");
     }
 
     std::vector<uint8_t> plaintext(ct_len);
     int pt_len = 0;
     if (EVP_DecryptUpdate(ctx.get(), plaintext.data(), &pt_len,
                           ct, static_cast<int>(ct_len)) != 1)
-        throw std::runtime_error("AES-GCM DecryptUpdate failed");
+        XSTD_THROW_ERROR_MSG(kGENERIC, "AES-GCM DecryptUpdate failed");
 
     // Set expected tag.
     if (EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_TAG,
                              static_cast<int>(kAesGcmTagSize),
                              const_cast<uint8_t*>(tag)) != 1)
-        throw std::runtime_error("AES-GCM set tag failed");
+        XSTD_THROW_ERROR_MSG(kGENERIC, "AES-GCM set tag failed");
 
     int final_len = 0;
     if (EVP_DecryptFinal_ex(ctx.get(),
                              plaintext.data() + pt_len, &final_len) != 1)
-        throw std::runtime_error("AES-GCM authentication tag mismatch — data corrupted or wrong key");
+        XSTD_THROW_ERROR_MSG(kDecryptionFailed, "AES-GCM authentication tag mismatch — data corrupted or wrong key");
 
     plaintext.resize(static_cast<std::size_t>(pt_len + final_len));
     return plaintext;
@@ -180,7 +181,7 @@ std::vector<uint8_t> AesCtrEncryptor::Encrypt(
     const EVP_CIPHER* cipher = AesCtrCipher(key.size());
 
     if (EVP_EncryptInit_ex(ctx.get(), cipher, nullptr, key.data(), iv.data()) != 1)
-        throw std::runtime_error("AES-CTR EncryptInit failed");
+        XSTD_THROW_ERROR_MSG(kGENERIC, "AES-CTR EncryptInit failed");
 
     std::vector<uint8_t> out;
     out.reserve(kAesCtrIvSize + plaintext.size());
@@ -190,9 +191,9 @@ std::vector<uint8_t> AesCtrEncryptor::Encrypt(
     int n1 = 0, n2 = 0;
     if (EVP_EncryptUpdate(ctx.get(), out.data() + kAesCtrIvSize, &n1,
                           plaintext.data(), static_cast<int>(plaintext.size())) != 1)
-        throw std::runtime_error("AES-CTR EncryptUpdate failed");
+        XSTD_THROW_ERROR_MSG(kGENERIC, "AES-CTR EncryptUpdate failed");
     if (EVP_EncryptFinal_ex(ctx.get(), out.data() + kAesCtrIvSize + n1, &n2) != 1)
-        throw std::runtime_error("AES-CTR EncryptFinal failed");
+        XSTD_THROW_ERROR_MSG(kGENERIC, "AES-CTR EncryptFinal failed");
     out.resize(kAesCtrIvSize + static_cast<std::size_t>(n1 + n2));
     return out;
 }
@@ -203,7 +204,7 @@ std::vector<uint8_t> AesCtrEncryptor::Decrypt(
     std::span<const uint8_t> /*aad*/) const
 {
     if (ciphertext_with_iv.size() < kAesCtrIvSize)
-        throw std::runtime_error("AES-CTR ciphertext too short");
+        XSTD_THROW_ERROR_MSG(kInvalidArgument, "AES-CTR ciphertext too short");
 
     const uint8_t* iv  = ciphertext_with_iv.data();
     const std::size_t ct_len = ciphertext_with_iv.size() - kAesCtrIvSize;
@@ -213,15 +214,15 @@ std::vector<uint8_t> AesCtrEncryptor::Decrypt(
     const EVP_CIPHER* cipher = AesCtrCipher(key.size());
 
     if (EVP_DecryptInit_ex(ctx.get(), cipher, nullptr, key.data(), iv) != 1)
-        throw std::runtime_error("AES-CTR DecryptInit failed");
+        XSTD_THROW_ERROR_MSG(kGENERIC, "AES-CTR DecryptInit failed");
 
     std::vector<uint8_t> plaintext(ct_len);
     int n1 = 0, n2 = 0;
     if (EVP_DecryptUpdate(ctx.get(), plaintext.data(), &n1,
                           ct, static_cast<int>(ct_len)) != 1)
-        throw std::runtime_error("AES-CTR DecryptUpdate failed");
+        XSTD_THROW_ERROR_MSG(kGENERIC, "AES-CTR DecryptUpdate failed");
     if (EVP_DecryptFinal_ex(ctx.get(), plaintext.data() + n1, &n2) != 1)
-        throw std::runtime_error("AES-CTR DecryptFinal failed");
+        XSTD_THROW_ERROR_MSG(kGENERIC, "AES-CTR DecryptFinal failed");
     plaintext.resize(static_cast<std::size_t>(n1 + n2));
     return plaintext;
 }
