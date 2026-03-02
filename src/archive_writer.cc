@@ -59,8 +59,8 @@ XSTD_Result ArchiveWriter::Init() {
 // AddFile
 // ---------------------------------------------------------------------------
 
-XSTD_Result ArchiveWriter::AddFile(const std::string&       archive_path,
-                                    std::span<const uint8_t> data)
+XSTD_Result ArchiveWriter::AddFile(const std::string&       filename,
+                                   std::span<const uint8_t> data)
 {
     if (finalised_)
         return XSTD_returnError(kAlreadyFinalised);
@@ -74,7 +74,7 @@ XSTD_Result ArchiveWriter::AddFile(const std::string&       archive_path,
             std::chrono::system_clock::now().time_since_epoch()).count();
 
         FileMetadata meta;
-        meta.file_name         = archive_path;
+        meta.file_name         = filename;
         meta.original_size     = static_cast<int64_t>(data.size());
         meta.created_time      = now;
         meta.last_modified_time = now;
@@ -96,7 +96,7 @@ XSTD_Result ArchiveWriter::AddFile(const std::string&       archive_path,
             if (data.empty()) break;  // single empty-file page
         }
 
-        catalog_.Insert(archive_path, meta);
+        catalog_.Insert(filename, meta);
         ++file_count_;
     } catch (...) {
         return XSTD_returnError(kIOError);
@@ -110,7 +110,7 @@ XSTD_Result ArchiveWriter::AddFile(const std::string&       archive_path,
 // ---------------------------------------------------------------------------
 
 XSTD_Result ArchiveWriter::AddFileFromDisk(const std::filesystem::path& source,
-                                            const std::string&           archive_path)
+                                           const std::string&           filename)
 {
     std::ifstream f(source, std::ios::binary);
     if (!f.is_open())
@@ -119,7 +119,7 @@ XSTD_Result ArchiveWriter::AddFileFromDisk(const std::filesystem::path& source,
     std::vector<uint8_t> data(
         (std::istreambuf_iterator<char>(f)),
         std::istreambuf_iterator<char>());
-    return AddFile(archive_path, data);
+    return AddFile(filename, data);
 }
 
 // ---------------------------------------------------------------------------
@@ -193,11 +193,11 @@ void ArchiveWriter::WriteArchiveHeader() {
     file_.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
 }
 
-XSTD_Result ArchiveWriter::DeleteFile(const std::string& archive_path) {
+XSTD_Result ArchiveWriter::DeleteFile(const std::string& filename) {
     if (finalised_)
         return XSTD_returnError(kAlreadyFinalised);
 
-    auto opt_meta = catalog_.Find(archive_path);
+    auto opt_meta = catalog_.Find(filename);
     if (!opt_meta) return XSTD_returnError(kFileNotFound);
     if (opt_meta->deleted) return XSTD_returnSuccess();  // already deleted
 
@@ -215,7 +215,7 @@ XSTD_Result ArchiveWriter::DeleteFile(const std::string& archive_path) {
         }
 
         meta.deleted = true;
-        catalog_.Insert(archive_path, meta);
+        catalog_.Insert(filename, meta);
 
         // Restore the put pointer to end-of-file so that Finalise()
         // correctly determines the catalog offset.

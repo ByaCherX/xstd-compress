@@ -127,7 +127,7 @@ std::vector<uint8_t> Catalog::Serialise() const {
     std::vector<uint8_t> buf;
     // Use BTree::Serialise with our key/value serialisers.
     tree_.Serialise(buf,
-        [](std::vector<uint8_t>& b, const std::string& k)     { SerialiseKey(b, k);   },
+        [](std::vector<uint8_t>& b, const std::string& k)  { SerialiseKey(b, k);   },
         [](std::vector<uint8_t>& b, const FileMetadata& v) { SerialiseValue(b, v); });
     return buf;
 }

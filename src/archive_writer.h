@@ -68,25 +68,25 @@ public:
     [[nodiscard]] XSTD_Result Init();
 
     /// Add a file from a memory buffer.
-    [[nodiscard]] XSTD_Result AddFile(const std::string&       archive_path,
-                                       std::span<const uint8_t> data);
+    [[nodiscard]] XSTD_Result AddFile(const std::string& filename,
+                                std::span<const uint8_t> data);
 
     /// Add a file from a std::vector (convenience overload).
-    [[nodiscard]] XSTD_Result AddFile(const std::string& archive_path,
-                                       const std::vector<uint8_t>& data) {
-        return AddFile(archive_path, std::span<const uint8_t>(data));
+    [[nodiscard]] XSTD_Result AddFile(const std::string& filename,
+                             const std::vector<uint8_t>& data) {
+        return AddFile(filename, std::span<const uint8_t>(data));
     }
 
     /// Add a file from disk.
     [[nodiscard]] XSTD_Result AddFileFromDisk(const std::filesystem::path& source,
-                                               const std::string&           archive_path);
+                                              const std::string&           filename);
 
     /// Logically delete a previously-added file.
     /// Marks the file's catalog entry and each of its page headers on disk as deleted.
     /// Returns kFileNotFound if the file was not found.
     /// Returns kSuccess if the file was (or was already) deleted.
     /// Physical data is preserved; use ArchiveReader::RecoverFile() to restore.
-    [[nodiscard]] XSTD_Result DeleteFile(const std::string& archive_path);
+    [[nodiscard]] XSTD_Result DeleteFile(const std::string& filename);
 
     /// Writes catalog + footer, flushes and closes the archive.
     [[nodiscard]] XSTD_Result Finalise();

@@ -62,20 +62,20 @@ public:
     void Close() { file_.close(); lru_cache_.clear(); lru_order_.clear(); }
 
     // -- List --
-    [[nodiscard]] std::vector<std::string>      ListFiles()                         const;
-    [[nodiscard]] std::vector<std::string>      ListDeletedFiles()                  const;
-    [[nodiscard]] std::vector<std::string>      ListDirectory(const std::string& prefix) const;
-    [[nodiscard]] std::optional<FileMetadata>   Stat(const std::string& archive_path) const;
+    [[nodiscard]] std::vector<std::string>    ListFiles() const;
+    [[nodiscard]] std::vector<std::string>    ListDeletedFiles() const;
+    [[nodiscard]] std::vector<std::string>    ListDirectory(const std::string& prefix) const;
+    [[nodiscard]] std::optional<FileMetadata> Stat(const std::string& filename) const;
 
     // -- Extract --
-    [[nodiscard]] XSTD_Result ExtractFile(const std::string& archive_path,
-                                           std::vector<uint8_t>& out);
-    [[nodiscard]] XSTD_Result ExtractFileToDisk(const std::string&           archive_path,
-                                                 const std::filesystem::path& dest);
+    [[nodiscard]] XSTD_Result ExtractFile(const std::string& filename,
+                                       std::vector<uint8_t>& out);
+    [[nodiscard]] XSTD_Result ExtractFileToDisk(const std::string& filename,
+                                      const std::filesystem::path& dest);
 
     // -- Soft-delete recovery --
     /// Returns the data of a logically-deleted file, or std::nullopt if not found / unrecoverable.
-    [[nodiscard]] std::optional<std::vector<uint8_t>> RecoverFile(const std::string& archive_path);
+    [[nodiscard]] std::optional<std::vector<uint8_t>> RecoverFile(const std::string& filename);
 
     // -- Archive info --
     [[nodiscard]] const ArchiveHeader& Header()    const noexcept { return header_; }
@@ -93,9 +93,8 @@ private:
     using CacheValue = std::vector<uint8_t>;
     struct LruEntry { CacheKey key; CacheValue value; };
 
-    std::list<LruEntry>                              lru_order_;
-    std::unordered_map<CacheKey,
-        std::list<LruEntry>::iterator>               lru_cache_;
+    std::list<LruEntry> lru_order_;
+    std::unordered_map<CacheKey, std::list<LruEntry>::iterator> lru_cache_;
 
     void ReadAndValidateHeader();
     void ReadAndValidateCatalog();

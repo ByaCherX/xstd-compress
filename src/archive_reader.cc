@@ -79,18 +79,18 @@ std::vector<std::string> ArchiveReader::ListDirectory(const std::string& prefix)
     return paths;
 }
 
-std::optional<FileMetadata> ArchiveReader::Stat(const std::string& archive_path) const {
-    return catalog_.Find(archive_path);
+std::optional<FileMetadata> ArchiveReader::Stat(const std::string& filename) const {
+    return catalog_.Find(filename);
 }
 
 // ---------------------------------------------------------------------------
 // Extract
 // ---------------------------------------------------------------------------
 
-XSTD_Result ArchiveReader::ExtractFile(const std::string& archive_path,
+XSTD_Result ArchiveReader::ExtractFile(const std::string& filename,
                                         std::vector<uint8_t>& out)
 {
-    auto opt_meta = catalog_.Find(archive_path);
+    auto opt_meta = catalog_.Find(filename);
     if (!opt_meta || opt_meta->deleted)
         return XSTD_returnError(kFileNotFound);
 
@@ -105,11 +105,11 @@ XSTD_Result ArchiveReader::ExtractFile(const std::string& archive_path,
     return XSTD_returnSuccess();
 }
 
-XSTD_Result ArchiveReader::ExtractFileToDisk(const std::string&           archive_path,
+XSTD_Result ArchiveReader::ExtractFileToDisk(const std::string&           filename,
                                               const std::filesystem::path& dest)
 {
     std::vector<uint8_t> data;
-    if (auto err = ExtractFile(archive_path, data); err != kSuccess)
+    if (auto err = ExtractFile(filename, data); err != kSuccess)
         return err;
 
     // Ensure parent directories exist.
@@ -293,9 +293,9 @@ std::vector<uint8_t> ArchiveReader::AssembleFile(const FileMetadata& meta) {
 // ---------------------------------------------------------------------------
 
 std::optional<std::vector<uint8_t>> ArchiveReader::RecoverFile(
-    const std::string& archive_path)
+    const std::string& filename)
 {
-    auto opt_meta = catalog_.Find(archive_path);
+    auto opt_meta = catalog_.Find(filename);
     if (!opt_meta || !opt_meta->deleted) return std::nullopt;
     try {
         return AssembleFile(*opt_meta);
