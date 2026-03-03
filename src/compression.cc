@@ -108,7 +108,7 @@ XSTD_Result ZstdCompressor::Decompress(std::span<const uint8_t> input,
 // CompressorFactory
 // ---------------------------------------------------------------------------
 
-std::unique_ptr<ICompressor> CompressorFactory::Create(CompressionCodec codec) {
+std::unique_ptr<ICompressor> CompressorFactory::Create(CompressionCodec codec) noexcept {
     switch (codec.Type()) {
         case CompressionType::UNCOMPRESSED:
             return std::make_unique<NoopCompressor>();

@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "types.h"
+#include "xstd_errors.h"
 
 namespace xstd {
 

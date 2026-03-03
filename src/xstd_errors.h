@@ -16,28 +16,40 @@ typedef enum {
     kGENERIC  = 1,
 
     /* Input configuration */
-    kInvalidArgument, // Bad options (e.g. key length mismatch).
+    kInvalidArgument,       // Bad options (e.g. key length mismatch).
 
     /* Object state */
-    kAlreadyFinalised, // Write/delete attempted after Finalise().
+    kAlreadyFinalised,      // Write/delete attempted after Finalise().
 
     /* File-system */
-    kCannotOpenFile, // Archive or source file could not be opened.
-    kCannotWriteFile, // Destination file could not be written.
+    kCannotOpenFile,        // Archive or source file could not be opened.
+    kCannotWriteFile,       // Destination file could not be written.
 
-    /* Archive content */
-    kFileNotFound, // Requested path not present in the catalog.
-    kInvalidArchive, // Bad magic, truncated structure, or catalog error.
+    /* Archive structure */
+    kFileNotFound,          // Requested path not present in the catalog.
+    kInvalidArchive,        // Bad magic number or structurally invalid archive.
+    kArchiveTruncated,      // File is shorter than expected (header/footer/page read returned fewer bytes).
+    kArchiveVersionMismatch,// Archive format version is not supported by this reader (too old or too new).
+    kCatalogCorrupted,      // Catalog (B+ Tree) deserialisation failed; entry data is corrupt or truncated.
 
     /* Encryption */
-    kDecryptionFailed, // Wrong key or authentication tag mismatch.
-    kUnsupportedAlgorithm, // Unrecognized encryption or compression codec.
+    kDecryptionFailed,      // Wrong key or GCM authentication tag mismatch.
+    kEncryptionFailed,      // OpenSSL EVP encryption operation failed (init, update, or finalise).
+    kMissingEncryptionKey,  // Archive is encrypted but no decryption key was provided.
+    kUnsupportedAlgorithm,  // Unrecognized encryption algorithm or compression codec.
+
+    /* Compression */
+    kCompressionFailed,     // Compressor (e.g. ZSTD) failed to compress a page.
+    kDecompressionFailed,   // Decompressor (e.g. ZSTD) failed; data may be corrupt or truncated.
+
+    /* Page management */
+    kPageAlreadyAllocated,  // AllocateAt() called for a page ID that is already in use.
 
     /* Data integrity */
-    kChecksumMismatch, // CRC-32 or SHA-256 verification failed.
+    kChecksumMismatch,      // CRC-32 (per-page) or SHA-256 (per-file) verification failed.
 
     /* Generic */
-    kIOError, // Unclassified I/O failure.
+    kIOError,               // Unclassified I/O failure (seek, read, write, or PRNG error).
 } XSTD_ErrorCode;
 
 /** 
@@ -80,15 +92,66 @@ inline XSTD_Result XSTD_returnError(XSTD_ErrorCode errorCode)
 inline const char* XSTD_ErrorCode_toString(XSTD_Result res)
 {
     switch (static_cast<XSTD_ErrorCode>(res)) {
-        case kSuccess:             
+        case kSuccess:
             return "Success";
-        case kGENERIC:              
+        case kGENERIC:
             return "GENERIC";
+
+        /* Input configuration */
+        case kInvalidArgument:
+            return "InvalidArgument: Bad options (e.g. key length mismatch).";
+
+        /* Object state */
+        case kAlreadyFinalised:
+            return "AlreadyFinalised: Write/delete attempted after Finalise().";
+
+        /* File-system */
+        case kCannotOpenFile:
+            return "CannotOpenFile: Archive or source file could not be opened.";
+        case kCannotWriteFile:
+            return "CannotWriteFile: Destination file could not be written.";
+
+        /* Archive structure */
+        case kFileNotFound:
+            return "FileNotFound: Requested path not present in the catalog.";
+        case kInvalidArchive:
+            return "InvalidArchive: Bad magic number or structurally invalid archive.";
+        case kArchiveTruncated:
+            return "ArchiveTruncated: File is shorter than expected (header/footer/page read returned fewer bytes).";
+        case kArchiveVersionMismatch:
+            return "ArchiveVersionMismatch: Archive format version is not supported by this reader (too old or too new).";
+        case kCatalogCorrupted:
+            return "CatalogCorrupted: Catalog (B+ Tree) deserialisation failed; entry data is corrupt or truncated.";
+
+        /* Encryption */
+        case kDecryptionFailed:
+            return "DecryptionFailed: Wrong key or GCM authentication tag mismatch.";
+        case kEncryptionFailed:
+            return "EncryptionFailed: OpenSSL EVP encryption operation failed (init, update, or finalise).";
+        case kMissingEncryptionKey:
+            return "MissingEncryptionKey: Archive is encrypted but no decryption key was provided.";
+        case kUnsupportedAlgorithm:
+            return "UnsupportedAlgorithm: Unrecognized encryption algorithm or compression codec.";
+
         /* Compression */
         case kCompressionFailed:
             return "CompressionFailed: Compressor (e.g. ZSTD) failed to compress a page.";
         case kDecompressionFailed:
             return "DecompressionFailed: Decompressor (e.g. ZSTD) failed; data may be corrupt or truncated.";
+
+        /* Page management */
+        case kPageAlreadyAllocated:
+            return "PageAlreadyAllocated: AllocateAt() called for a page ID that is already in use.";
+
+        /* Data integrity */
+        case kChecksumMismatch:
+            return "ChecksumMismatch: CRC-32 (per-page) or SHA-256 (per-file) verification failed.";
+
+        /* Generic */
+        case kIOError:
+            return "IOError: Unclassified I/O failure (seek, read, write, or PRNG error).";
+
+        default:
             return "UnknownError";
     }
 }
