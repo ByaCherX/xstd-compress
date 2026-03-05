@@ -1,5 +1,6 @@
 #include "archive.h"
 
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -12,21 +13,11 @@ namespace xstd {
 // ---------------------------------------------------------------------------
 
 Archive::Archive(const std::filesystem::path& path, ArchiveOptions opts)
-    : path_(path), opts_(std::move(opts)),
-      thread_count_(opts_.thread_count == 0
-          ? static_cast<uint32_t>(std::thread::hardware_concurrency())
-          : opts_.thread_count)
+    : path_(path), opts_(std::move(opts))
 {}
 
 Archive::~Archive() {
     (void)Close();
-}
-
-void Archive::SetThreadCount(uint32_t n) {
-    thread_count_ = (n == 0)
-        ? static_cast<uint32_t>(std::thread::hardware_concurrency())
-        : n;
-    // TODO (Phase 4): propagate to internal thread pool when implemented.
 }
 
 // ---------------------------------------------------------------------------
@@ -34,6 +25,99 @@ void Archive::SetThreadCount(uint32_t n) {
 // ---------------------------------------------------------------------------
 
 XSTD_Result Archive::Open() {
+    if (opts_.read_write) {
+        // ---- ReadWrite mode: single shared IOHandler ----
+        try {
+            shared_io_ = std::make_shared<IOHandler>(path_,
+                                                    IOHandler::OpenMode::ReadWrite);
+        } catch (const XstdError& e) {
+            return XSTD_returnError(e.code());
+        } catch (...) {
+            return XSTD_returnError(kCannotOpenFile);
+        }
+
+        ArchiveReaderOptions ropts;
+        ropts.key            = opts_.key;
+        ropts.cache_capacity = opts_.cache_capacity;
+
+        reader_ = std::make_unique<ArchiveReader>(shared_io_, std::move(ropts));
+        if (XSTD_Result r = reader_->Open(); XSTD_isError(r)) {
+            reader_.reset();
+            shared_io_.reset();
+            return r;
+        }
+
+        // Compute catalog_offset from the footer.
+        // Footer is at the end; catalog_offset is the first byte after page data.
+        // We need to find it from the reader's internal state via the footer.
+        // We can derive it: catalog_offset = file_size - footer_stored_size - catalog_size.
+        // Simpler: just track the catalog write position via the header information.
+        // For now: the safest approach is scanning the footer.
+        {
+            const auto& hdr = reader_->Header();
+            std::size_t footer_stored_size = sizeof(ArchiveFooter);
+            if (hdr.encryption.IsEncrypted()) {
+                auto enc = EncryptorFactory::Create(hdr.encryption.GetAlgorithm());
+                if (enc)
+                    footer_stored_size = enc->IvSize() + sizeof(ArchiveFooter)
+                                         + enc->TagSize();
+            }
+            // Read the footer to get catalog_offset.
+            const int64_t footer_off =
+                shared_io_->FileSize() - static_cast<int64_t>(footer_stored_size);
+            auto footer_span = shared_io_->ReadAt(footer_off, footer_stored_size);
+
+            ArchiveFooter footer{};
+            if (hdr.encryption.IsEncrypted()) {
+                auto enc = EncryptorFactory::Create(hdr.encryption.GetAlgorithm());
+                auto plain = enc->Decrypt({footer_span.data(), footer_span.size()},
+                                          opts_.key);
+                std::memcpy(&footer, plain.data(), sizeof(ArchiveFooter));
+            } else {
+                std::memcpy(&footer, footer_span.data(), sizeof(ArchiveFooter));
+            }
+            catalog_offset_ = footer.catalog_offset;
+        }
+
+        // Compute next_page_id: scan all files to find the max page_id.
+        int32_t max_page_id = -1;
+        for (const auto& f : reader_->ListFiles()) {
+            auto meta = reader_->Stat(f);
+            if (!meta) continue;
+            for (const auto& ph : meta->pages)
+                if (ph.page_id > max_page_id) max_page_id = ph.page_id;
+        }
+        for (const auto& f : reader_->ListDeletedFiles()) {
+            auto meta = reader_->Stat(f);
+            if (!meta) continue;
+            for (const auto& ph : meta->pages)
+                if (ph.page_id > max_page_id) max_page_id = ph.page_id;
+        }
+
+        ArchiveWriterOptions wopts;
+        wopts.codec = opts_.codec;
+        wopts.key   = opts_.key;
+
+        writer_ = std::make_unique<ArchiveWriter>(path_, std::move(wopts));
+        if (XSTD_Result r = writer_->InitAppend(
+                shared_io_, reader_->Header(),
+                reader_->GetCatalog(),
+                max_page_id + 1,
+                reader_->FileCount());
+            XSTD_isError(r))
+        {
+            writer_.reset();
+            reader_->Close();
+            reader_.reset();
+            shared_io_.reset();
+            return r;
+        }
+
+        opened_ = true;
+        return XSTD_returnSuccess();
+    }
+
+    // ---- Normal (ReadOnly) mode ----
     ArchiveReaderOptions ropts;
     ropts.key             = opts_.key;
     ropts.cache_capacity  = opts_.cache_capacity;
@@ -77,13 +161,16 @@ XSTD_Result Archive::Close() {
     XSTD_Result result = XSTD_returnSuccess();
 
     if (writer_) {
-        if (XSTD_Result r = writer_->Finalise(); XSTD_isError(r)) result = r;
+        if (!IsReadWrite()) {
+            if (XSTD_Result r = writer_->Finalise(); XSTD_isError(r)) result = r;
+        }
         writer_.reset();
     }
     if (reader_) {
         if (XSTD_Result r = reader_->Close(); XSTD_isError(r)) result = r;
         reader_.reset();
     }
+    shared_io_.reset();
 
     opened_  = false;
     created_ = false;
@@ -101,22 +188,27 @@ XSTD_Result Archive::AddFile(const std::string&       dest_path,
     if (created_ && writer_)
         return writer_->AddFile(dest_path, data);
 
-    // Open mode: need to rewrite to incorporate new data.
     if (!opened_ || !reader_)
         return XSTD_returnError(kInvalidArgument);
 
-    // Capture data into a local copy so the lambda can own it.
+    // ReadWrite fast path: append pages in-place, then commit catalog.
+    if (IsReadWrite()) {
+        shared_io_->SetAppendPosition(catalog_offset_);
+        if (auto r = writer_->AddFile(dest_path, data); XSTD_isError(r))
+            return r;
+        return CommitCatalog();
+    }
+
+    // Fallback: full rewrite.
     std::vector<uint8_t> data_copy(data.begin(), data.end());
     std::string          path_copy = dest_path;
 
     return Rewrite([&](ArchiveWriter& w, ArchiveReader& r) -> XSTD_Result {
-        // Re-add all currently active files.
         for (const auto& f : r.ListFiles()) {
             std::vector<uint8_t> buf;
             if (auto e = r.ExtractFile(f, buf); XSTD_isError(e)) return e;
             if (auto e = w.AddFile(f, buf);      XSTD_isError(e)) return e;
         }
-        // Add the new file.
         return w.AddFile(path_copy, data_copy);
     });
 }
@@ -133,6 +225,13 @@ XSTD_Result Archive::AddFile(const std::string&           dest_path,
 
     if (!opened_ || !reader_)
         return XSTD_returnError(kInvalidArgument);
+
+    if (IsReadWrite()) {
+        shared_io_->SetAppendPosition(catalog_offset_);
+        if (auto r = writer_->AddFileFromDisk(source, dest_path); XSTD_isError(r))
+            return r;
+        return CommitCatalog();
+    }
 
     std::string path_copy   = dest_path;
     auto        source_copy = source;
@@ -151,23 +250,34 @@ XSTD_Result Archive::AddFile(const std::string&           dest_path,
 // DeleteFile
 // ---------------------------------------------------------------------------
 
-XSTD_Result Archive::DeleteFile(const std::string& path) {
+XSTD_Result Archive::DeleteFile(const std::string& path, bool soft_delete) {
     if (!opened_ || !reader_)
         return XSTD_returnError(kInvalidArgument);
 
-    // Verify existence before rewriting.
     if (!reader_->Stat(path).has_value())
         return XSTD_returnError(kFileNotFound);
 
-    std::string path_copy = path;
+    if (IsReadWrite()) {
+        // In-place: patch page header flags + rewrite catalog.
+        if (auto r = writer_->DeleteFile(path, soft_delete); XSTD_isError(r))
+            return r;
+        shared_io_->SetAppendPosition(catalog_offset_);
+        return CommitCatalog();
+    }
+
+    std::string path_copy   = path;
+    bool        soft_copy   = soft_delete;
 
     return Rewrite([&](ArchiveWriter& w, ArchiveReader& r) -> XSTD_Result {
         for (const auto& f : r.ListFiles()) {
+            if (!soft_copy && f == path_copy) continue;  // hard delete: omit from rewrite
             std::vector<uint8_t> buf;
             if (auto e = r.ExtractFile(f, buf); XSTD_isError(e)) return e;
             if (auto e = w.AddFile(f, buf);      XSTD_isError(e)) return e;
         }
-        return w.DeleteFile(path_copy);
+        if (soft_copy)
+            return w.DeleteFile(path_copy, true);
+        return XSTD_returnSuccess();
     });
 }
 
@@ -178,14 +288,24 @@ XSTD_Result Archive::DeleteFile(const std::string& path) {
 XSTD_Result Archive::RenameFile(const std::string& old_path,
                                 const std::string& new_path)
 {
-    // RenameFile is a catalog-only operation: we insert under the new key
-    // and erase the old key — no page data needs to be rewritten.
-    // Therefore we rewrite the archive but emit the target file under new_path.
     if (!opened_ || !reader_)
         return XSTD_returnError(kInvalidArgument);
 
     if (!reader_->Stat(old_path).has_value())
         return XSTD_returnError(kFileNotFound);
+
+    if (IsReadWrite()) {
+        // Catalog-only: move entry from old key to new key.
+        auto meta = reader_->Stat(old_path);
+        if (!meta) return XSTD_returnError(kFileNotFound);
+        auto& cat = writer_->GetCatalog();
+        cat.Erase(old_path);
+        FileMetadata m = *meta;
+        m.file_name = new_path;
+        cat.Insert(new_path, m);
+        shared_io_->SetAppendPosition(catalog_offset_);
+        return CommitCatalog();
+    }
 
     std::string old_copy = old_path;
     std::string new_copy = new_path;
@@ -194,7 +314,6 @@ XSTD_Result Archive::RenameFile(const std::string& old_path,
         for (const auto& f : r.ListFiles()) {
             std::vector<uint8_t> buf;
             if (auto e = r.ExtractFile(f, buf); XSTD_isError(e)) return e;
-            // Emit under new_path if this is the renamed file.
             const std::string& emit_path = (f == old_copy) ? new_copy : f;
             if (auto e = w.AddFile(emit_path, buf); XSTD_isError(e)) return e;
         }
@@ -260,6 +379,39 @@ std::size_t Archive::FileCount() const {
 }
 
 // ---------------------------------------------------------------------------
+// RecoverFile
+// ---------------------------------------------------------------------------
+
+std::optional<std::vector<uint8_t>> Archive::RecoverFile(const std::string& path) {
+    if (!reader_) return std::nullopt;
+    return reader_->RecoverFile(path);
+}
+
+// ---------------------------------------------------------------------------
+// Private — CommitCatalog (ReadWrite mode)
+// ---------------------------------------------------------------------------
+
+XSTD_Result Archive::CommitCatalog() {
+    // Remember where the catalog starts (for the next mutation).
+    const int64_t new_catalog_offset = shared_io_->AppendPosition();
+
+    if (auto r = writer_->WriteCatalogAndFooter(); XSTD_isError(r))
+        return r;
+
+    // Truncate any leftover bytes beyond the new end-of-file.
+    if (auto r = shared_io_->Truncate(shared_io_->AppendPosition()); XSTD_isError(r))
+        return r;
+
+    catalog_offset_ = new_catalog_offset;
+
+    // Refresh the reader's view of the catalog.
+    if (auto r = reader_->ReloadCatalog(); XSTD_isError(r))
+        return r;
+
+    return XSTD_returnSuccess();
+}
+
+// ---------------------------------------------------------------------------
 // Private — Rewrite
 // ---------------------------------------------------------------------------
 
@@ -280,7 +432,7 @@ XSTD_Result Archive::Rewrite(
     wopts.key        = opts_.key;
     wopts.codec      = hdr.IsCompressed()
         ? opts_.codec
-        : CompressionCodec{CompressionType::UNCOMPRESSED, CompressionLevel::XSTD_fast};
+        : CompressionCodec{CompressionType::UNCOMPRESSED, CompressionLevel::XSTD_RESERVED_LEVEL};
 
     ArchiveWriter writer(tmp_path, wopts);
     if (auto r = writer.Init(); XSTD_isError(r)) return r;

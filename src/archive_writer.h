@@ -67,6 +67,15 @@ public:
     /// Must be called before any AddFile / DeleteFile / Finalise calls.
     [[nodiscard]] XSTD_Result Init();
 
+    /// Initialise for append mode on a shared IOHandler (ReadWrite).
+    /// Inherits header settings, catalog, page IDs and file count from an
+    /// already-opened archive.  Does NOT write a new archive header.
+    [[nodiscard]] XSTD_Result InitAppend(std::shared_ptr<IOHandler> io,
+                                         const ArchiveHeader&       hdr,
+                                         const Catalog&             catalog,
+                                         int32_t                    next_page_id,
+                                         std::size_t                file_count);
+
     /// Add a file from a memory buffer.
     [[nodiscard]] XSTD_Result AddFile(const std::string& filename,
                                 std::span<const uint8_t> data);
@@ -81,20 +90,35 @@ public:
     [[nodiscard]] XSTD_Result AddFileFromDisk(const std::filesystem::path& source,
                                               const std::string&           filename);
 
-    /// Logically delete a previously-added file.
-    /// Marks the file's catalog entry and each of its page headers on disk as deleted.
+    /// Delete a previously-added file.
+    /// When soft_delete=true: marks each page header on disk as deleted and keeps the
+    ///   catalog entry with deleted=true so the file can be recovered later.
+    /// When soft_delete=false (default): zeroes out all page payloads on disk and
+    ///   removes the catalog entry entirely (unrecoverable).
     /// Returns kFileNotFound if the file was not found.
     /// Returns kSuccess if the file was (or was already) deleted.
-    /// Physical data is preserved; use ArchiveReader::RecoverFile() to restore.
-    [[nodiscard]] XSTD_Result DeleteFile(const std::string& filename);
+    [[nodiscard]] XSTD_Result DeleteFile(const std::string& filename,
+                                         bool soft_delete = false);
 
     /// Writes catalog + footer, flushes and closes the archive.
     [[nodiscard]] XSTD_Result Finalise();
 
+    /// Write catalog + footer at the current append position, flush.
+    /// Does NOT close the IOHandler (used in ReadWrite mode).
+    [[nodiscard]] XSTD_Result WriteCatalogAndFooter();
+
+    /// Direct access to the internal catalog.
+    [[nodiscard]] Catalog& GetCatalog() noexcept { return catalog_; }
+    [[nodiscard]] const Catalog& GetCatalog() const noexcept { return catalog_; }
+
 private:
+    IOHandler& IO() { return shared_io_ ? *shared_io_ : *io_; }
+    const IOHandler& IO() const { return shared_io_ ? *shared_io_ : *io_; }
+
     std::filesystem::path        path_;
     ArchiveWriterOptions         opts_;
-    std::optional<IOHandler>     io_;          ///< Positional-write I/O (set in Init())
+    std::shared_ptr<IOHandler>   shared_io_;   ///< Shared I/O (ReadWrite mode)
+    std::optional<IOHandler>     io_;          ///< Owned I/O (WriteOnly mode, set in Init())
     std::unique_ptr<ICompressor> compressor_;
     std::unique_ptr<IEncryptor>  encryptor_;
     Catalog                      catalog_;

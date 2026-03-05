@@ -18,14 +18,20 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& path,
                              ArchiveReaderOptions         opts)
     : path_(path), opts_(std::move(opts)) {}
 
+ArchiveReader::ArchiveReader(std::shared_ptr<IOHandler>   io,
+                             ArchiveReaderOptions         opts)
+    : shared_io_(std::move(io)), opts_(std::move(opts)) {}
+
 // ---------------------------------------------------------------------------
 // Open
 // ---------------------------------------------------------------------------
 
 XSTD_Result ArchiveReader::Open() {
-    try {
-        io_.emplace(path_, IOHandler::OpenMode::ReadOnly);
-    } XSTD_ERROR_CATCH_HANDLE(kCannotOpenFile)
+    if (!shared_io_) {
+        try {
+            io_.emplace(path_, IOHandler::OpenMode::ReadOnly);
+        } XSTD_ERROR_CATCH_HANDLE(kCannotOpenFile)
+    }
 
     try {
         ReadAndValidateHeader();
@@ -57,7 +63,25 @@ XSTD_Result ArchiveReader::Close() {
     encryptor_.reset();
     lru_cache_.clear();
     lru_order_.clear();
-    io_.reset();
+    if (!shared_io_)
+        io_.reset();
+    return XSTD_returnSuccess();
+}
+
+// ---------------------------------------------------------------------------
+// ReloadCatalog
+// ---------------------------------------------------------------------------
+
+XSTD_Result ArchiveReader::ReloadCatalog() {
+    // Refresh file_size so ReadAt sees newly appended data.
+    IO().Remap();
+    try {
+        ReadAndValidateCatalog();
+    } catch (const XstdError& e) {
+        return XSTD_returnError(e.code());
+    }
+    lru_cache_.clear();
+    lru_order_.clear();
     return XSTD_returnSuccess();
 }
 
@@ -141,7 +165,7 @@ XSTD_Result ArchiveReader::ExtractFileToDisk(const std::string& filename,
 // ---------------------------------------------------------------------------
 
 void ArchiveReader::ReadAndValidateHeader() {
-    auto span = io_->ReadAt(0, sizeof(header_));
+    auto span = IO().ReadAt(0, sizeof(header_));
     std::memcpy(&header_, span.data(), sizeof(header_));
     if (header_.magic != kMagic)
         XSTD_THROW_ERROR_MSG(kInvalidArchive, "invalid magic number — not an Xstd archive");
@@ -174,12 +198,12 @@ void ArchiveReader::ReadAndValidateCatalog() {
 
     // Read footer via memory-mapped view.
     const int64_t footer_offset =
-        io_->FileSize() - static_cast<int64_t>(footer_stored_size);
+        IO().FileSize() - static_cast<int64_t>(footer_stored_size);
     if (footer_offset < static_cast<int64_t>(kArchiveHeaderSize))
         XSTD_THROW_ERROR_MSG(kArchiveTruncated,
             "archive is too small to contain a valid footer");
 
-    auto footer_span = io_->ReadAt(footer_offset, footer_stored_size);
+    auto footer_span = IO().ReadAt(footer_offset, footer_stored_size);
 
     // Decrypt footer if needed.
     ArchiveFooter footer{};
@@ -206,7 +230,7 @@ void ArchiveReader::ReadAndValidateCatalog() {
     if (footer.catalog_offset < 0 || footer.catalog_size <= 0)
         XSTD_THROW_ERROR_MSG(kCatalogCorrupted, "invalid catalog region in footer");
 
-    auto cat_span = io_->ReadAt(footer.catalog_offset,
+    auto cat_span = IO().ReadAt(footer.catalog_offset,
                                 static_cast<std::size_t>(footer.catalog_size));
     std::vector<uint8_t> cat_buf(cat_span.begin(), cat_span.end());
     catalog_.Deserialise(cat_buf);
@@ -234,7 +258,7 @@ const std::vector<uint8_t>& ArchiveReader::ReadPage(const PageHeader& ph)
     // Cache miss — read from memory-mapped file (zero-copy).
     const std::size_t data_offset =
         static_cast<std::size_t>(ph.offset) + kPageHeaderSize;
-    auto raw_span = io_->ReadAt(static_cast<int64_t>(data_offset),
+    auto raw_span = IO().ReadAt(static_cast<int64_t>(data_offset),
                                 static_cast<std::size_t>(ph.compressed_size));
 
     // Decrypt if needed, then verify CRC.

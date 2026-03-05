@@ -64,8 +64,9 @@ struct ArchiveOptions {
     CompressionCodec  codec      {CompressionType::ZSTD, CompressionLevel::XSTD_greedy};
     ArchiveEncryption encryption {};         ///< Default = no encryption
 
-    // --- Parallelism (Phase 4 hook) ---
-    uint32_t thread_count{1};               ///< 0 = hardware_concurrency (Phase 4)
+    // --- ReadWrite mode ---
+    bool read_write{false};                 ///< True = single shared IOHandler,
+                                            ///< in-place mutations (no Rewrite).
 };
 
 // ---------------------------------------------------------------------------
@@ -118,8 +119,13 @@ public:
     [[nodiscard]] XSTD_Result AddFile(const std::string& dest_path,
                             const std::filesystem::path& source);
 
-    /// Logically delete a file (soft-delete; data remains recoverable).
-    [[nodiscard]] XSTD_Result DeleteFile(const std::string& path);
+    /// Delete a file from the archive.
+    /// When soft_delete=false (default): zeroes page data on disk and removes the
+    ///   catalog entry entirely (unrecoverable).
+    /// When soft_delete=true: marks pages as deleted and keeps the catalog entry
+    ///   with deleted=true so the file can be recovered with RecoverFile().
+    [[nodiscard]] XSTD_Result DeleteFile(const std::string& path,
+                                         bool soft_delete = false);
 
     /// Rename a file (updates catalog key; no page data rewrite needed).
     [[nodiscard]] XSTD_Result RenameFile(const std::string& old_path,
@@ -136,6 +142,13 @@ public:
     /// Extract to a file on disk (same name: ExtractFile overload).
     [[nodiscard]] XSTD_Result ExtractFile(const std::string& path,
                                 const std::filesystem::path& dest);
+
+    // -----------------------------------------------------------------------
+    // Recovery (requires Open)
+    // -----------------------------------------------------------------------
+
+    /// Recover a soft-deleted file.  Returns std::nullopt if not found or unrecoverable.
+    [[nodiscard]] std::optional<std::vector<uint8_t>> RecoverFile(const std::string& path);
 
     // -----------------------------------------------------------------------
     // Catalog queries (requires Open)
@@ -161,13 +174,22 @@ public:
 private:
     std::filesystem::path path_;
     ArchiveOptions        opts_;
-    uint32_t              thread_count_;
 
+    std::shared_ptr<IOHandler>     shared_io_;     ///< Shared I/O (ReadWrite mode)
     std::unique_ptr<ArchiveReader> reader_;
     std::unique_ptr<ArchiveWriter> writer_;
 
     bool opened_{false};   ///< True when Open() succeeded
     bool created_{false};  ///< True when Create() succeeded
+
+    /// Catalog offset in the file (ReadWrite mode, updated after each mutation).
+    int64_t catalog_offset_{0};
+
+    /// Is this archive in ReadWrite mode (shared IOHandler)?
+    [[nodiscard]] bool IsReadWrite() const noexcept { return shared_io_ != nullptr; }
+
+    /// Write catalog+footer and truncate; refresh reader catalog.
+    [[nodiscard]] XSTD_Result CommitCatalog();
 
     // Internal: rewrite the entire archive through a user-supplied transform.
     // The transform lambda receives (new_writer, existing_reader) and may add/skip

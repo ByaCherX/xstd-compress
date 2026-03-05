@@ -122,6 +122,16 @@ public:
     /// Size of the file on disk (updated after every Append / WriteAt).
     [[nodiscard]] int64_t FileSize()  const noexcept { return file_size_; }
 
+    /// Reset the append cursor to a specific position.
+    /// Useful for overwriting catalog+footer in ReadWrite mode.
+    /// Only valid in WriteOnly or ReadWrite mode.
+    void SetAppendPosition(int64_t pos);
+
+    /// Truncate the file to the given size.
+    /// If append_pos_ > size, it is reset to size.
+    /// Only valid in WriteOnly or ReadWrite mode.
+    XSTD_Result Truncate(int64_t size);
+
     /// Flush OS write buffers to disk (fsync / FlushFileBuffers).
     XSTD_Result Flush();
 

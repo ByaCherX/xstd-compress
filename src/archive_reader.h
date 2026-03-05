@@ -56,12 +56,21 @@ public:
     explicit ArchiveReader(const std::filesystem::path& path,
                            ArchiveReaderOptions         opts = {});
 
+    /// Construct with a shared IOHandler (ReadWrite mode).
+    /// The reader does NOT own the IOHandler; the caller must keep it alive.
+    explicit ArchiveReader(std::shared_ptr<IOHandler>   io,
+                           ArchiveReaderOptions         opts = {});
+
     // Non-copyable.
     ArchiveReader(const ArchiveReader&)            = delete;
     ArchiveReader& operator=(const ArchiveReader&) = delete;
 
     [[nodiscard]] XSTD_Result Open();
     XSTD_Result Close();
+
+    /// Re-read the catalog from disk (after in-place mutations).
+    /// Clears the LRU cache.
+    [[nodiscard]] XSTD_Result ReloadCatalog();
 
     // -- List --
     [[nodiscard]] std::vector<std::string>    ListFiles() const;
@@ -83,10 +92,17 @@ public:
     [[nodiscard]] const ArchiveHeader& Header()    const noexcept { return header_; }
     [[nodiscard]] std::size_t          FileCount() const noexcept { return catalog_.FileCount(); }
 
+    /// Direct access to the internal catalog (for ReadWrite shared mode).
+    [[nodiscard]] const Catalog& GetCatalog() const noexcept { return catalog_; }
+
 private:
+    IOHandler& IO() { return shared_io_ ? *shared_io_ : *io_; }
+    const IOHandler& IO() const { return shared_io_ ? *shared_io_ : *io_; }
+
     std::filesystem::path            path_;
     ArchiveReaderOptions             opts_;
-    std::optional<IOHandler>         io_;          ///< Memory-mapped I/O (set in Open())
+    std::shared_ptr<IOHandler>       shared_io_;   ///< Shared I/O (ReadWrite mode)
+    std::optional<IOHandler>         io_;          ///< Owned I/O (ReadOnly mode, set in Open())
     ArchiveHeader                    header_{};
     Catalog                          catalog_;
     std::unique_ptr<ICompressor>     compressor_;

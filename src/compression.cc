@@ -29,7 +29,7 @@ static int ToZstdLevel(CompressionLevel lvl) noexcept {
     }
 }
 
-ZstdCompressor::ZstdCompressor(CompressionCodec codec)
+ZstdCompressor::ZstdCompressor(CompressionCodec codec) noexcept
     : level_(ToZstdLevel(codec_.Level())) {
         this->codec_ = codec;
     }

@@ -226,6 +226,40 @@ XSTD_Result IOHandler::WriteAt(int64_t offset, std::span<const uint8_t> data)
 }
 
 // ===========================================================================
+// SetAppendPosition / Truncate
+// ===========================================================================
+
+void IOHandler::SetAppendPosition(int64_t pos)
+{
+    if (mode_ == OpenMode::ReadOnly)
+        XSTD_THROW_ERROR_MSG(kIOError, "SetAppendPosition called on a read-only IOHandler");
+    append_pos_ = pos;
+}
+
+XSTD_Result IOHandler::Truncate(int64_t size)
+{
+    if (mode_ == OpenMode::ReadOnly)
+        return XSTD_returnError(kIOError);
+
+#ifdef _WIN32
+    LARGE_INTEGER li;
+    li.QuadPart = size;
+    if (!SetFilePointerEx(file_handle_, li, nullptr, FILE_BEGIN))
+        return XSTD_returnError(kIOError);
+    if (!SetEndOfFile(file_handle_))
+        return XSTD_returnError(kIOError);
+#else
+    if (::ftruncate(fd_, static_cast<off_t>(size)) != 0)
+        return XSTD_returnError(kIOError);
+#endif
+
+    file_size_ = size;
+    if (append_pos_ > size)
+        append_pos_ = size;
+    return XSTD_returnSuccess();
+}
+
+// ===========================================================================
 // Flush / Remap
 // ===========================================================================
 
@@ -247,11 +281,21 @@ XSTD_Result IOHandler::Flush()
 
 XSTD_Result IOHandler::Remap()
 {
-    // ReadWrite mode bypasses memory mapping entirely; Remap() is a no-op.
-    if (mode_ != OpenMode::ReadOnly) return XSTD_returnSuccess();
+    if (mode_ == OpenMode::WriteOnly) return XSTD_returnSuccess();
+
+    if (mode_ == OpenMode::ReadWrite) {
+        // No memory map; just refresh file_size_ from OS.
+#ifdef _WIN32
+        file_size_ = QueryFileSize(file_handle_);
+#else
+        file_size_ = QueryFileSize(fd_);
+#endif
+        return XSTD_returnSuccess();
+    }
+
+    // ReadOnly: full unmap + remap.
     try {
         UnmapFile();
-        // Refresh file size from OS.
 #ifdef _WIN32
         file_size_ = QueryFileSize(file_handle_);
 #else

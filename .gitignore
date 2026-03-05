@@ -28,5 +28,6 @@ CTestTestfile.cmake
 cmake-build-*
 
 # Microsoft Visual Studio Code
+.vs
 .vscode
 .devcontainer/

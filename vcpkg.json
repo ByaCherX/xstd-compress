@@ -5,6 +5,15 @@
     "gtest",
     "zstd",
     "fmt",
-    "openssl"
-  ]
+    "openssl",
+    "cli11"
+  ],
+  "features": {
+    "gui": {
+      "description": "Enable GUI application (requires Qt6)",
+      "dependencies": [
+        "qtbase"
+      ]
+    }
+  }
 }
