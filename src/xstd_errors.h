@@ -241,6 +241,14 @@ private:
 #define XSTD_THROW_ERROR_MSG(errCode, msg) \
     throw ::xstd::XstdError((errCode), (msg))
 
+/**/
+#define XSTD_ERROR_CATCH_HANDLE(errCode) \
+    catch (const XstdError& e) { \
+        return XSTD_returnError(e.code()); \
+    } catch (...) { \
+        return XSTD_returnError(errCode); \
+    }
+
 } // namespace xstd
 
 #endif
