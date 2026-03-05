@@ -184,6 +184,8 @@ struct CompressionCodec {
               (static_cast<uint8_t>(reserved)            << 7) |
               ((static_cast<uint8_t>(type)  & 0x07u)     << 4) |
               (static_cast<uint8_t>(level)  & 0x0Fu))) {}
+    
+    constexpr CompressionCodec(uint8_t v) noexcept : raw(v) {}
 
     [[nodiscard]] constexpr CompressionReserved Reserved() const noexcept {
         return static_cast<CompressionReserved>(raw >> 7);
@@ -193,6 +195,16 @@ struct CompressionCodec {
     }
     [[nodiscard]] constexpr CompressionLevel Level() const noexcept {
         return static_cast<CompressionLevel>(raw & 0x0Fu);
+    }
+
+    /// Equality operators for easy comparison.
+    [[nodiscard]] friend bool operator==(const CompressionCodec& lhs,
+                                         const CompressionCodec& rhs) noexcept {
+        return lhs.raw == rhs.raw;
+    }
+    [[nodiscard]] friend bool operator!=(const CompressionCodec& lhs,
+                                         const CompressionCodec& rhs) noexcept {
+        return !(lhs == rhs);
     }
 };
 
