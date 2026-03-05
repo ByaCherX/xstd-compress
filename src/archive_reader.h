@@ -16,11 +16,12 @@
 //   reader.ExtractFileToDisk("data/input.csv", "/tmp/input.csv");
 //
 // LRU page cache reduces I/O for repeated reads of the same pages.
+// IEncryptor are created once in Open() and reused across
 // ---------------------------------------------------------------------------
 
 #include <filesystem>
-#include <fstream>
 #include <list>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -32,6 +33,7 @@
 #include "constants.h"
 #include "metadata.h"
 #include "catalog.h"
+#include "iohandler.h"
 
 namespace xstd {
 
@@ -59,7 +61,7 @@ public:
     ArchiveReader& operator=(const ArchiveReader&) = delete;
 
     [[nodiscard]] XSTD_Result Open();
-    void Close() { file_.close(); lru_cache_.clear(); lru_order_.clear(); }
+    XSTD_Result Close();
 
     // -- List --
     [[nodiscard]] std::vector<std::string>    ListFiles() const;
@@ -82,11 +84,13 @@ public:
     [[nodiscard]] std::size_t          FileCount() const noexcept { return catalog_.FileCount(); }
 
 private:
-    std::filesystem::path path_;
-    ArchiveReaderOptions  opts_;
-    std::ifstream         file_;
-    ArchiveHeader         header_{};
-    Catalog               catalog_;
+    std::filesystem::path            path_;
+    ArchiveReaderOptions             opts_;
+    std::optional<IOHandler>         io_;          ///< Memory-mapped I/O (set in Open())
+    ArchiveHeader                    header_{};
+    Catalog                          catalog_;
+    std::unique_ptr<ICompressor>     compressor_;
+    std::unique_ptr<IEncryptor>      encryptor_;   ///< Created once in Open(), nullptr if not encrypted
 
     // -- LRU page cache --
     using CacheKey   = int32_t;
@@ -98,8 +102,11 @@ private:
 
     void ReadAndValidateHeader();
     void ReadAndValidateCatalog();
+
+    /// Read a single page from disk, decrypt and decompress as needed, and return the data.
     [[nodiscard]] const std::vector<uint8_t>& ReadPage(const PageHeader& ph);
-    [[nodiscard]] std::vector<uint8_t>        AssembleFile(const FileMetadata& meta);
+
+    [[nodiscard]] std::vector<uint8_t> AssembleFile(const FileMetadata& meta);
 };
 
 } // namespace xstd

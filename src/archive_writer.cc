@@ -7,7 +7,6 @@
 #include <string>
 
 #include "sha256.h"
-
 #include "xxhasher.h"
 
 namespace xstd {
@@ -22,7 +21,7 @@ ArchiveWriter::ArchiveWriter(const std::filesystem::path& path,
 {}
 
 ArchiveWriter::~ArchiveWriter() {
-    if (!finalised_ && file_.is_open())
+    if (!finalised_ && io_.has_value())
         (void)Finalise();
 }
 
@@ -33,13 +32,11 @@ ArchiveWriter::~ArchiveWriter() {
 XSTD_Result ArchiveWriter::Init() {
     try {
         ValidateOptions();
-    } catch (const std::invalid_argument&) {
-        return XSTD_returnError(kInvalidArgument);
-    }
+    } XSTD_ERROR_CATCH_HANDLE(kInvalidArgument)
 
-    file_.open(path_, std::ios::binary | std::ios::trunc);
-    if (!file_.is_open())
-        return XSTD_returnError(kCannotOpenFile);
+    try {
+        io_.emplace(path_, IOHandler::OpenMode::WriteOnly);
+    } XSTD_ERROR_CATCH_HANDLE(kCannotOpenFile)
 
     try {
         compressor_ = CompressorFactory::Create(opts_.codec);
@@ -47,8 +44,11 @@ XSTD_Result ArchiveWriter::Init() {
             encryptor_ = EncryptorFactory::Create(opts_.encryption.GetAlgorithm());
 
         WriteArchiveHeader();
+    } catch (const XstdError& e) {
+        io_.reset();
+        return XSTD_returnError(e.code());
     } catch (...) {
-        file_.close();
+        io_.reset();
         return XSTD_returnError(kIOError);
     }
 
@@ -89,7 +89,8 @@ XSTD_Result ArchiveWriter::AddFile(const std::string&       filename,
                 page_bytes, data.size() - offset);
             std::span<const uint8_t> chunk(data.data() + offset, chunk_size);
 
-            PageHeader ph = WritePage(chunk, PageType::DATA_PAGE);
+            // Using default compressor for the page; override with per_page_codec if needed.
+            PageHeader ph = WritePage(chunk);
             meta.pages.push_back(ph);
 
             offset += chunk_size;
@@ -98,9 +99,7 @@ XSTD_Result ArchiveWriter::AddFile(const std::string&       filename,
 
         catalog_.Insert(filename, meta);
         ++file_count_;
-    } catch (...) {
-        return XSTD_returnError(kIOError);
-    }
+    } XSTD_ERROR_CATCH_HANDLE(kIOError)
 
     return XSTD_returnSuccess();
 }
@@ -134,9 +133,9 @@ XSTD_Result ArchiveWriter::Finalise() {
         // Serialize catalog.
         std::vector<uint8_t> cat_buf = catalog_.Serialise();
 
-        const int64_t catalog_offset = static_cast<int64_t>(file_.tellp());
-        file_.write(reinterpret_cast<const char*>(cat_buf.data()),
-                    static_cast<std::streamsize>(cat_buf.size()));
+        const int64_t catalog_offset = io_->AppendPosition();
+        if (auto r = io_->Append({cat_buf.data(), cat_buf.size()}); XSTD_isError(r))
+            return r;
 
         // Build footer struct.
         ArchiveFooter footer;
@@ -149,14 +148,17 @@ XSTD_Result ArchiveWriter::Finalise() {
             const auto* raw = reinterpret_cast<const uint8_t*>(&footer);
             auto enc_footer = encryptor_->Encrypt(
                 std::span<const uint8_t>(raw, sizeof(footer)), opts_.key);
-            file_.write(reinterpret_cast<const char*>(enc_footer.data()),
-                        static_cast<std::streamsize>(enc_footer.size()));
+            if (auto r = io_->Append({enc_footer.data(), enc_footer.size()});
+                XSTD_isError(r))
+                return r;
         } else {
-            file_.write(reinterpret_cast<const char*>(&footer), sizeof(footer));
+            const auto* raw = reinterpret_cast<const uint8_t*>(&footer);
+            if (auto r = io_->Append({raw, sizeof(footer)}); XSTD_isError(r))
+                return r;
         }
 
-        file_.flush();
-        file_.close();
+        if (auto r = io_->Flush(); XSTD_isError(r)) return r;
+        io_.reset();
     } catch (...) {
         return XSTD_returnError(kIOError);
     }
@@ -170,7 +172,6 @@ XSTD_Result ArchiveWriter::Finalise() {
 
 void ArchiveWriter::ValidateOptions() const {
     if (opts_.encryption.IsEncrypted()) {
-        // Key size must exactly match what is encoded in the encryption descriptor.
         const std::size_t expected_key_bytes =
             static_cast<std::size_t>(opts_.encryption.GetKeySize());
         if (opts_.key.size() != expected_key_bytes)
@@ -190,7 +191,10 @@ void ArchiveWriter::WriteArchiveHeader() {
     hdr.flags.SetCompressed(opts_.codec.Type() != CompressionType::UNCOMPRESSED);
     hdr.num_pages  = 0;
 
-    file_.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
+    const auto* raw = reinterpret_cast<const uint8_t*>(&hdr);
+    XSTD_Result r   = io_->Append({raw, sizeof(hdr)});
+    if (XSTD_isError(r))
+        XSTD_THROW_ERROR_MSG(kCannotWriteFile, "failed to write archive header");
 }
 
 XSTD_Result ArchiveWriter::DeleteFile(const std::string& filename) {
@@ -208,18 +212,17 @@ XSTD_Result ArchiveWriter::DeleteFile(const std::string& filename) {
         FileMetadata meta = *opt_meta;
         for (PageHeader& ph : meta.pages) {
             ph.SetDeleted(true);
-            file_.seekp(static_cast<std::streamoff>(ph.offset) +
-                        static_cast<std::streamoff>(kFlagsOffset),
-                        std::ios::beg);
-            file_.write(reinterpret_cast<const char*>(&ph.flags), 1);
+            const int64_t patch_off =
+                static_cast<int64_t>(ph.offset)
+                + static_cast<int64_t>(kFlagsOffset);
+            if (auto r = io_->WriteAt(patch_off, {&ph.flags, 1}); XSTD_isError(r))
+                return r;
         }
 
         meta.deleted = true;
         catalog_.Insert(filename, meta);
-
-        // Restore the put pointer to end-of-file so that Finalise()
-        // correctly determines the catalog offset.
-        file_.seekp(0, std::ios::end);
+        // No need to restore an EOF pointer — IOHandler tracks append_pos_
+        // independently of WriteAt operations.
     } catch (...) {
         return XSTD_returnError(kIOError);
     }
@@ -228,11 +231,27 @@ XSTD_Result ArchiveWriter::DeleteFile(const std::string& filename) {
 }
 
 PageHeader ArchiveWriter::WritePage(std::span<const uint8_t> chunk,
-                                    PageType                  type)
+                                    PageType                 type,
+                                    Encoding                 encoding,
+                                    CompressionCodec         per_page_codec)
 {
+    // Resolve effective codec: use opts_.codec as default.
+    const CompressionCodec effective_codec =
+        (per_page_codec.raw != 0) ? per_page_codec : opts_.codec;
+
+    // Select compressor: reuse member if codec matches, otherwise create temporary.
+    ICompressor* comp_ptr = nullptr;
+    std::unique_ptr<ICompressor> tmp_comp;
+    if (compressor_ && compressor_->Codec() == effective_codec) {
+        comp_ptr = compressor_.get();
+    } else {
+        tmp_comp = CompressorFactory::Create(effective_codec);
+        comp_ptr = tmp_comp.get();
+    }
+
     // 1. Compress.
     std::vector<uint8_t> compressed;
-    XSTD_Result result = compressor_->Compress(chunk, compressed);
+    XSTD_Result result = comp_ptr->Compress(chunk, compressed);
     if (XSTD_isError(result))
         throw XstdError(kCompressionFailed);
 
@@ -243,29 +262,33 @@ PageHeader ArchiveWriter::WritePage(std::span<const uint8_t> chunk,
     std::vector<uint8_t> payload;
     bool encrypted = false;
     if (encryptor_) {
-        payload    = encryptor_->Encrypt(compressed, opts_.key);
-        encrypted  = true;
+        payload   = encryptor_->Encrypt(compressed, opts_.key);
+        encrypted = true;
     } else {
         payload = std::move(compressed);
     }
 
     // 4. Build PageHeader.
-    const int32_t write_offset = static_cast<int32_t>(file_.tellp());
+    const int32_t write_offset = static_cast<int32_t>(io_->AppendPosition());
     PageHeader ph;
     ph.page_id           = AllocatePageId();
     ph.offset            = write_offset;
     ph.page_type         = static_cast<uint8_t>(type);
-    ph.encoding          = static_cast<uint8_t>(Encoding::PLAIN);
-    ph.compression_codec = opts_.codec.raw;
+    ph.encoding          = static_cast<uint8_t>(encoding);
+    ph.compression_codec = effective_codec.raw;
     ph.uncompressed_size = static_cast<int32_t>(chunk.size());
     ph.compressed_size   = static_cast<int32_t>(payload.size());
     ph.crc32             = static_cast<uint32_t>(crc & 0xFFFF'FFFF);
     ph.SetEncrypted(encrypted);
 
-    // 5. Write header + payload.
-    file_.write(reinterpret_cast<const char*>(&ph), sizeof(ph));
-    file_.write(reinterpret_cast<const char*>(payload.data()),
-                static_cast<std::streamsize>(payload.size()));
+    // 5. Append header + payload.
+    const auto* ph_raw = reinterpret_cast<const uint8_t*>(&ph);
+    if (auto io_result = io_->Append({ph_raw, sizeof(ph)});
+            XSTD_isError(io_result))
+        throw XstdError(kCannotWriteFile);
+    if (auto io_result = io_->Append({payload.data(), payload.size()});
+            XSTD_isError(io_result))
+        throw XstdError(kCannotWriteFile);
 
     return ph;
 }
@@ -275,3 +298,6 @@ int32_t ArchiveWriter::AllocatePageId() {
 }
 
 } // namespace xstd
+
+
+

@@ -25,7 +25,7 @@ public:
 
     // -- Allocation --
     /// Returns the next free page ID and marks it as allocated.
-    [[nodiscard]] int32_t Allocate();
+    int32_t Allocate();
     /// Allocates a specific page ID. Throws if already allocated.
     void AllocateAt(int32_t id);
     /// Marks a page as free. No-op if already free.

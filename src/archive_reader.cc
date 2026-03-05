@@ -4,7 +4,6 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 
 #include "sha256.h"
 #include "xxhasher.h"
@@ -24,30 +23,41 @@ ArchiveReader::ArchiveReader(const std::filesystem::path& path,
 // ---------------------------------------------------------------------------
 
 XSTD_Result ArchiveReader::Open() {
-    file_.open(path_, std::ios::binary);
-    if (!file_.is_open())
-        return XSTD_returnError(kCannotOpenFile);
+    try {
+        io_.emplace(path_, IOHandler::OpenMode::ReadOnly);
+    } XSTD_ERROR_CATCH_HANDLE(kCannotOpenFile)
 
     try {
         ReadAndValidateHeader();
-    } catch (const XstdError& e) {
-        file_.close();
-        return XSTD_returnError(e.code());
-    } catch (...) {
-        file_.close();
-        return XSTD_returnError(kInvalidArchive);
-    }
 
-    try {
+        // -----------------------------------------------------------------------
+        // IEncryptor is created once — reused for ALL ReadPage() calls.
+        // ICompressor is resolved lazily on first ReadPage() and then cached so
+        // that uniform archives avoid repeated CompressorFactory::Create() calls.
+        // -----------------------------------------------------------------------
+        if (header_.IsEncrypted()) {
+            if (opts_.key.empty())
+                return XSTD_returnError(kMissingEncryptionKey);
+            encryptor_ = EncryptorFactory::Create(header_.encryption.GetAlgorithm());
+            if (!encryptor_)
+                return XSTD_returnError(kUnsupportedAlgorithm);
+        }
+
         ReadAndValidateCatalog();
     } catch (const XstdError& e) {
-        file_.close();
+        io_.reset();
         return XSTD_returnError(e.code());
-    } catch (...) {
-        file_.close();
-        return XSTD_returnError(kIOError);
     }
 
+    return XSTD_returnSuccess();
+}
+
+XSTD_Result ArchiveReader::Close() {
+    compressor_.reset();
+    encryptor_.reset();
+    lru_cache_.clear();
+    lru_order_.clear();
+    io_.reset();
     return XSTD_returnSuccess();
 }
 
@@ -88,7 +98,7 @@ std::optional<FileMetadata> ArchiveReader::Stat(const std::string& filename) con
 // ---------------------------------------------------------------------------
 
 XSTD_Result ArchiveReader::ExtractFile(const std::string& filename,
-                                        std::vector<uint8_t>& out)
+                                    std::vector<uint8_t>& out)
 {
     auto opt_meta = catalog_.Find(filename);
     if (!opt_meta || opt_meta->deleted)
@@ -96,17 +106,13 @@ XSTD_Result ArchiveReader::ExtractFile(const std::string& filename,
 
     try {
         out = AssembleFile(*opt_meta);
-    } catch (const XstdError& e) {
-        return XSTD_returnError(e.code());
-    } catch (...) {
-        return XSTD_returnError(kIOError);
-    }
+    } XSTD_ERROR_CATCH_HANDLE(kIOError)
 
     return XSTD_returnSuccess();
 }
 
-XSTD_Result ArchiveReader::ExtractFileToDisk(const std::string&           filename,
-                                              const std::filesystem::path& dest)
+XSTD_Result ArchiveReader::ExtractFileToDisk(const std::string& filename,
+                                   const std::filesystem::path& dest)
 {
     std::vector<uint8_t> data;
     if (auto err = ExtractFile(filename, data); err != kSuccess)
@@ -135,10 +141,8 @@ XSTD_Result ArchiveReader::ExtractFileToDisk(const std::string&           filena
 // ---------------------------------------------------------------------------
 
 void ArchiveReader::ReadAndValidateHeader() {
-    file_.seekg(0, std::ios::beg);
-    file_.read(reinterpret_cast<char*>(&header_), sizeof(header_));
-    if (file_.gcount() != sizeof(header_))
-        XSTD_THROW_ERROR_MSG(kInvalidArchive, "cannot read archive header — file may be truncated");
+    auto span = io_->ReadAt(0, sizeof(header_));
+    std::memcpy(&header_, span.data(), sizeof(header_));
     if (header_.magic != kMagic)
         XSTD_THROW_ERROR_MSG(kInvalidArchive, "invalid magic number — not an Xstd archive");
 }
@@ -148,62 +152,76 @@ void ArchiveReader::ReadAndValidateHeader() {
 // ---------------------------------------------------------------------------
 
 void ArchiveReader::ReadAndValidateCatalog() {
-    // Determine how many bytes the footer occupies on disk.
-    // When the archive is encrypted the footer itself is also encrypted:
-    //   encrypted_footer_size = IV + sizeof(ArchiveFooter) + tag (GCM) or 0 (CTR)
+    // Determine the on-disk size of the footer (possibly encrypted).
     std::unique_ptr<IEncryptor> footer_enc;
-    std::streamsize footer_stored_size = static_cast<std::streamsize>(sizeof(ArchiveFooter));
+    std::size_t footer_stored_size = sizeof(ArchiveFooter);
 
     if (header_.encryption.IsEncrypted()) {
-        footer_enc = EncryptorFactory::Create(header_.encryption.GetAlgorithm());
-        if (!footer_enc)
-            XSTD_THROW_ERROR_MSG(kUnsupportedAlgorithm, "unsupported encryption algorithm in archive header");
-        footer_stored_size = static_cast<std::streamsize>(
-            footer_enc->IvSize() + sizeof(ArchiveFooter) + footer_enc->TagSize());
+        // Reuse the already-created IEncryptor (stored in encryptor_) if present;
+        // fall back to a temporary if not yet initialised (shouldn't happen).
+        if (encryptor_) {
+            footer_stored_size = encryptor_->IvSize() + sizeof(ArchiveFooter)
+                                 + encryptor_->TagSize();
+        } else {
+            footer_enc = EncryptorFactory::Create(header_.encryption.GetAlgorithm());
+            if (!footer_enc)
+                XSTD_THROW_ERROR_MSG(kUnsupportedAlgorithm,
+                    "unsupported encryption algorithm in archive header");
+            footer_stored_size = footer_enc->IvSize() + sizeof(ArchiveFooter)
+                                 + footer_enc->TagSize();
+        }
     }
 
-    // Read footer bytes from end of file.
-    file_.seekg(-footer_stored_size, std::ios::end);
-    std::vector<uint8_t> footer_raw(static_cast<std::size_t>(footer_stored_size));
-    file_.read(reinterpret_cast<char*>(footer_raw.data()), footer_stored_size);
-    if (file_.gcount() != footer_stored_size)
-        XSTD_THROW_ERROR_MSG(kInvalidArchive, "cannot read archive footer — file may be truncated");
+    // Read footer via memory-mapped view.
+    const int64_t footer_offset =
+        io_->FileSize() - static_cast<int64_t>(footer_stored_size);
+    if (footer_offset < static_cast<int64_t>(kArchiveHeaderSize))
+        XSTD_THROW_ERROR_MSG(kArchiveTruncated,
+            "archive is too small to contain a valid footer");
+
+    auto footer_span = io_->ReadAt(footer_offset, footer_stored_size);
 
     // Decrypt footer if needed.
     ArchiveFooter footer{};
-    if (footer_enc) {
+    IEncryptor*   dec = encryptor_ ? encryptor_.get() : footer_enc.get();
+    if (dec) {
         if (opts_.key.empty())
-            XSTD_THROW_ERROR_MSG(kMissingEncryptionKey, "archive is encrypted but no decryption key was provided");
-        auto plain = footer_enc->Decrypt(footer_raw, opts_.key);
+            XSTD_THROW_ERROR_MSG(kMissingEncryptionKey,
+                "archive is encrypted but no decryption key was provided");
+        std::vector<uint8_t> plain = dec->Decrypt(
+            {footer_span.data(), footer_span.size()}, opts_.key);
         if (plain.size() != sizeof(ArchiveFooter))
-            XSTD_THROW_ERROR_MSG(kDecryptionFailed, "decrypted footer has unexpected size — key may be wrong");
+            XSTD_THROW_ERROR_MSG(kDecryptionFailed,
+                "decrypted footer has unexpected size — key may be wrong");
         std::memcpy(&footer, plain.data(), sizeof(ArchiveFooter));
     } else {
-        std::memcpy(&footer, footer_raw.data(), sizeof(ArchiveFooter));
+        std::memcpy(&footer, footer_span.data(), sizeof(ArchiveFooter));
     }
 
     if (footer.footer_magic != kFooterMagic)
-        XSTD_THROW_ERROR_MSG(kInvalidArchive, "invalid footer magic — archive may be truncated or corrupted");
+        XSTD_THROW_ERROR_MSG(kInvalidArchive,
+            "invalid footer magic — archive may be truncated or corrupted");
 
-    // Read catalog bytes.
-    file_.seekg(footer.catalog_offset, std::ios::beg);
-    std::vector<uint8_t> cat_buf(static_cast<std::size_t>(footer.catalog_size));
-    file_.read(reinterpret_cast<char*>(cat_buf.data()),
-               static_cast<std::streamsize>(cat_buf.size()));
-    if (file_.gcount() != static_cast<std::streamsize>(cat_buf.size()))
-        XSTD_THROW_ERROR_MSG(kCatalogCorrupted, "catalog region truncated — archive may be corrupted");
+    // Read catalog bytes via memory-mapped view.
+    if (footer.catalog_offset < 0 || footer.catalog_size <= 0)
+        XSTD_THROW_ERROR_MSG(kCatalogCorrupted, "invalid catalog region in footer");
 
+    auto cat_span = io_->ReadAt(footer.catalog_offset,
+                                static_cast<std::size_t>(footer.catalog_size));
+    std::vector<uint8_t> cat_buf(cat_span.begin(), cat_span.end());
     catalog_.Deserialise(cat_buf);
 
     if (static_cast<std::size_t>(footer.num_files) != catalog_.FileCount())
-        XSTD_THROW_ERROR_MSG(kCatalogCorrupted, "catalog file count mismatch — archive may be corrupted");
+        XSTD_THROW_ERROR_MSG(kCatalogCorrupted,
+            "catalog file count mismatch — archive may be corrupted");
 }
 
 // ---------------------------------------------------------------------------
 // Private — ReadPage (with LRU cache)
 // ---------------------------------------------------------------------------
 
-const std::vector<uint8_t>& ArchiveReader::ReadPage(const PageHeader& ph) {
+const std::vector<uint8_t>& ArchiveReader::ReadPage(const PageHeader& ph)
+{
     const CacheKey key = ph.page_id;
 
     // Cache hit — move to front and return.
@@ -213,45 +231,62 @@ const std::vector<uint8_t>& ArchiveReader::ReadPage(const PageHeader& ph) {
         return it->second->value;
     }
 
-    // Cache miss — read from disk.
-    file_.seekg(ph.offset + static_cast<std::streamoff>(kPageHeaderSize), std::ios::beg);
-    std::vector<uint8_t> raw(static_cast<std::size_t>(ph.compressed_size));
-    file_.read(reinterpret_cast<char*>(raw.data()),
-               static_cast<std::streamsize>(raw.size()));
-    if (file_.gcount() != static_cast<std::streamsize>(raw.size()))
-        XSTD_THROW_ERROR_MSG(kIOError, "page data truncated (page_id=" + std::to_string(ph.page_id) + ")");
+    // Cache miss — read from memory-mapped file (zero-copy).
+    const std::size_t data_offset =
+        static_cast<std::size_t>(ph.offset) + kPageHeaderSize;
+    auto raw_span = io_->ReadAt(static_cast<int64_t>(data_offset),
+                                static_cast<std::size_t>(ph.compressed_size));
 
     // Decrypt if needed, then verify CRC.
     // CRC is always computed over the compressed plaintext (post-decryption).
     std::vector<uint8_t> plaintext;
     if (ph.IsEncrypted()) {
         if (opts_.key.empty())
-            XSTD_THROW_ERROR_MSG(kMissingEncryptionKey, "page is encrypted but no decryption key was provided");
-        const EncryptionAlgorithm alg = header_.encryption.GetAlgorithm();
-        auto enc = EncryptorFactory::Create(alg);
-        if (!enc)
-            XSTD_THROW_ERROR_MSG(kUnsupportedAlgorithm, "unsupported encryption algorithm in page header");
-        plaintext = enc->Decrypt(raw, opts_.key);
+            XSTD_THROW_ERROR_MSG(kMissingEncryptionKey,
+                "page is encrypted but no decryption key was provided");
+        if (!encryptor_)
+            XSTD_THROW_ERROR_MSG(kUnsupportedAlgorithm,
+                "no encryptor available for page_id=" + std::to_string(ph.page_id));
+        // IEncryptor::Decrypt is stateless (IV is embedded in ciphertext)
+        // so the shared encryptor_ is safe to call from multiple contexts.
+        plaintext = encryptor_->Decrypt(
+            {raw_span.data(), raw_span.size()}, opts_.key);
     } else {
-        plaintext = std::move(raw);
+        plaintext.assign(raw_span.begin(), raw_span.end());
     }
 
     // Verify CRC over compressed plaintext.
     {
         const uint64_t expected_crc = static_cast<uint64_t>(ph.crc32);
-        const uint64_t actual_crc   = XXHasher::Hash(plaintext.data(), plaintext.size()) & 0xFFFF'FFFF;
+        const uint64_t actual_crc   =
+            XXHasher::Hash(plaintext.data(), plaintext.size()) & 0xFFFF'FFFF;
         if (actual_crc != expected_crc)
-            XSTD_THROW_ERROR_MSG(kChecksumMismatch, "CRC mismatch on page_id=" + std::to_string(ph.page_id));
+            XSTD_THROW_ERROR_MSG(kChecksumMismatch,
+                "CRC mismatch on page_id=" + std::to_string(ph.page_id));
+    }
+
+    // Use the cached archive-level compressor if the codec matches; otherwise
+    // create a temporary one.  This avoids repeated factory calls for uniform
+    // archives while still supporting per-page variable codec (future use).
+    ICompressor* comp_ptr = nullptr;
+    CompressionCodec effective_codec(ph.compression_codec);
+
+    if (compressor_ && compressor_->Codec() == effective_codec) {
+        comp_ptr = compressor_.get();
+    } else {
+        // Cache the newly created compressor as the archive-level one
+        // so the next page benefits if the codec is consistent.
+        compressor_ = CompressorFactory::Create(effective_codec);
+        comp_ptr    = compressor_.get();
     }
 
     // Decompress.
-    CompressionCodec codec;
-    codec.raw = ph.compression_codec;
-    std::unique_ptr<ICompressor> comp = CompressorFactory::Create(codec);
     std::vector<uint8_t> decompressed;
-    XSTD_Result result = comp->Decompress(plaintext, decompressed, ph.uncompressed_size);
+    XSTD_Result result = comp_ptr->Decompress(plaintext, decompressed,
+                                              ph.uncompressed_size);
     if (XSTD_isError(result))
-        XSTD_THROW_ERROR_MSG(kDecompressionFailed, "decompression failed for page_id=" + std::to_string(ph.page_id));
+        XSTD_THROW_ERROR_MSG(kDecompressionFailed,
+            "decompression failed for page_id=" + std::to_string(ph.page_id));
 
     // Evict LRU entry if at capacity.
     if (lru_cache_.size() >= opts_.cache_capacity && opts_.cache_capacity > 0) {

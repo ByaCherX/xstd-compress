@@ -20,7 +20,6 @@
 // ---------------------------------------------------------------------------
 
 #include <filesystem>
-#include <fstream>
 #include <memory>
 #include <span>
 #include <string>
@@ -32,6 +31,7 @@
 #include "metadata.h"
 #include "catalog.h"
 #include "page_manager.h"
+#include "iohandler.h"
 
 namespace xstd {
 
@@ -94,7 +94,7 @@ public:
 private:
     std::filesystem::path        path_;
     ArchiveWriterOptions         opts_;
-    std::ofstream                file_;
+    std::optional<IOHandler>     io_;          ///< Positional-write I/O (set in Init())
     std::unique_ptr<ICompressor> compressor_;
     std::unique_ptr<IEncryptor>  encryptor_;
     Catalog                      catalog_;
@@ -103,10 +103,18 @@ private:
     std::size_t                  file_count_{0};
     bool                         finalised_{false};
 
-    void       ValidateOptions() const;
-    void       WriteArchiveHeader();
-    PageHeader WritePage(std::span<const uint8_t> chunk, PageType type);
-    int32_t    AllocatePageId();
+    void ValidateOptions() const;
+    void WriteArchiveHeader();
+
+    /// Write a single page with explicit type, encoding and per-page codec.
+    /// `per_page_codec` defaults to opts_.codec; passing a different value
+    /// allows individual pages to use a different compression algorithm.
+    PageHeader WritePage(std::span<const uint8_t> chunk,
+                         PageType                 type = PageType::DATA_PAGE,
+                         Encoding                 encoding = Encoding::PLAIN,
+                         CompressionCodec         per_page_codec = {});
+
+    int32_t AllocatePageId();
 };
 
 } // namespace xstd
