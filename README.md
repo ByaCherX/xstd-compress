@@ -1,5 +1,6 @@
-# XSTD — Express Standart Archive Format (🔬 Experimental)
+# XSTD — Express Standart Archive Format
 
+#### Status: 🔬 Experimental
 **XSTD** (`.xstd`) is a high-performance binary archive format designed for secure, compressed file storage. It combines ZSTD compression, AES-GCM/CTR encryption, SHA-256 integrity verification, and a B+ Tree-based file catalog into a single, page-oriented container.
 
 ## Project Goals
@@ -100,10 +101,10 @@ flowchart TD
     O --> P["Write Catalog<br/>(Serialized B+ Tree)"]
     P --> Q["Write Footer<br/>(catalog_offset, file_count, XEND)"]
 
-    style A fill:#e3f2fd,stroke:#1565c0
-    style Q fill:#e8f5e9,stroke:#2e7d32
-    style I fill:#fff3e0,stroke:#e65100
-    style G fill:#f3e5f5,stroke:#6a1b9a
+    style A fill:#e3f2fd,stroke:#1565c0,color:#383838
+    style Q fill:#e8f5e9,stroke:#2e7d32,color:#383838
+    style I fill:#fff3e0,stroke:#e65100,color:#383838
+    style G fill:#f3e5f5,stroke:#6a1b9a,color:#383838
 ```
 
 ### Reading (ExtractFile)
@@ -136,11 +137,11 @@ flowchart TD
     S --> T["Verify SHA-256 Checksum"]
     T --> U[/"Return Assembled File Data"/]
 
-    style A fill:#e3f2fd,stroke:#1565c0
-    style U fill:#e8f5e9,stroke:#2e7d32
-    style G fill:#ffebee,stroke:#c62828
-    style M fill:#fff3e0,stroke:#e65100
-    style O fill:#f3e5f5,stroke:#6a1b9a
+    style A fill:#e3f2fd,stroke:#1565c0,color:#383838
+    style U fill:#e8f5e9,stroke:#2e7d32,color:#383838
+    style G fill:#ffebee,stroke:#c62828,color:#383838
+    style M fill:#fff3e0,stroke:#e65100,color:#383838
+    style O fill:#f3e5f5,stroke:#6a1b9a,color:#383838
 ```
 
 ### ReadWrite Mode (In-Place Mutation)
@@ -174,8 +175,8 @@ flowchart LR
     Open --> Mutate
     Open -.->|"read_write=false"| Fallback
 
-    style Mutate fill:#e8f5e9,stroke:#2e7d32
-    style Fallback fill:#fff8e1,stroke:#f9a825
+    style Mutate fill:#e8f5e9,stroke:#2e7d32,color:#383838
+    style Fallback fill:#fff8e1,stroke:#f9a825,color:#383838
 ```
 
 ### Compression & Encryption Pipeline
@@ -198,12 +199,12 @@ flowchart LR
         R4 --> R5["Decoding"] --> R6["Raw Data"]
     end
 
-    style W6 fill:#e8eaf6,stroke:#283593
-    style R1 fill:#e8eaf6,stroke:#283593
-    style W4 fill:#fff3e0,stroke:#e65100
-    style R3 fill:#fff3e0,stroke:#e65100
-    style W3 fill:#f3e5f5,stroke:#6a1b9a
-    style R4 fill:#f3e5f5,stroke:#6a1b9a
+    style W6 fill:#e8eaf6,stroke:#283593,color:#383838
+    style R1 fill:#e8eaf6,stroke:#283593,color:#383838
+    style W4 fill:#fff3e0,stroke:#e65100,color:#383838
+    style R3 fill:#fff3e0,stroke:#e65100,color:#383838
+    style W3 fill:#f3e5f5,stroke:#6a1b9a,color:#383838
+    style R4 fill:#f3e5f5,stroke:#6a1b9a,color:#383838
 ```
 
 ## Components
