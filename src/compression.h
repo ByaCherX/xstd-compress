@@ -41,7 +41,9 @@ public:
                                    std::vector<uint8_t>&    output,
                                    int32_t                  uncompressed_size) const = 0;
 
-    [[nodiscard]] virtual CompressionType Type() const noexcept = 0;
+    [[nodiscard]] virtual CompressionCodec Codec() const noexcept = 0;
+protected:
+    CompressionCodec codec_;
 };
 
 // ---------------------------------------------------------------------------
@@ -49,6 +51,13 @@ public:
 // ---------------------------------------------------------------------------
 class NoopCompressor final : public ICompressor {
 public:
+    NoopCompressor() noexcept {
+        codec_ = CompressionCodec(
+            CompressionType::UNCOMPRESSED, 
+            CompressionLevel::XSTD_RESERVED_LEVEL
+        );
+    }
+
     XSTD_Result Compress(std::span<const uint8_t> input,
                          std::vector<uint8_t>&    output) const override {
         output.assign(input.begin(), input.end());
@@ -62,8 +71,8 @@ public:
         return XSTD_returnSuccess();
     }
 
-    [[nodiscard]] CompressionType Type() const noexcept override {
-        return CompressionType::UNCOMPRESSED;
+    [[nodiscard]] CompressionCodec Codec() const noexcept override {
+        return codec_;
     }
 };
 
@@ -72,7 +81,7 @@ public:
 // ---------------------------------------------------------------------------
 class ZstdCompressor final : public ICompressor {
 public:
-    explicit ZstdCompressor(CompressionLevel level = CompressionLevel::XSTD_greedy);
+    explicit ZstdCompressor(CompressionCodec codec) noexcept;
 
     XSTD_Result Compress(std::span<const uint8_t> input,
                          std::vector<uint8_t>&    output) const override;
@@ -81,8 +90,8 @@ public:
                            std::vector<uint8_t>&    output,
                            int32_t                  uncompressed_size) const override;
 
-    [[nodiscard]] CompressionType Type() const noexcept override {
-        return CompressionType::ZSTD;
+    [[nodiscard]] CompressionCodec Codec() const noexcept override {
+        return codec_;
     }
 
 private:

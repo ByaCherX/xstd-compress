@@ -29,8 +29,10 @@ static int ToZstdLevel(CompressionLevel lvl) noexcept {
     }
 }
 
-ZstdCompressor::ZstdCompressor(CompressionLevel level)
-    : level_(ToZstdLevel(level)) {}
+ZstdCompressor::ZstdCompressor(CompressionCodec codec)
+    : level_(ToZstdLevel(codec_.Level())) {
+        this->codec_ = codec;
+    }
 
 int ZstdCompressor::ZstdLevel(CompressionLevel lvl) noexcept {
     return ToZstdLevel(lvl);
@@ -71,7 +73,8 @@ XSTD_Result ZstdCompressor::Decompress(std::span<const uint8_t> input,
                 std::string("ZSTD decompress error: ") + ZSTD_getErrorName(result));
             #endif
             return XSTD_returnError(kDecompressionFailed);
-        output.resize(result);
+        output.resize(result); // Really unnecessary if uncompressed_size is correct, but be safe.
+        return XSTD_returnSuccess();
     } else {
         // Unknown size — use streaming decompress.
         ZSTD_DStream* stream = ZSTD_createDStream();
@@ -113,9 +116,9 @@ std::unique_ptr<ICompressor> CompressorFactory::Create(CompressionCodec codec) n
         case CompressionType::UNCOMPRESSED:
             return std::make_unique<NoopCompressor>();
         case CompressionType::ZSTD:
-            return std::make_unique<ZstdCompressor>(codec.Level());
+            return std::make_unique<ZstdCompressor>(codec);
         default:
-            return std::make_unique<ZstdCompressor>(codec.Level());
+            return std::make_unique<ZstdCompressor>(codec);
     }
 }
 
