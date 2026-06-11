@@ -15,7 +15,7 @@
 
 > [!Warning]
 > Currently, encryption not working due to a bug in the encryption layer. **DO NOT USE ENCRYPTION**
-> Xstd-app (GUI) also not working due to the same encryption bug, and will be disabled until fixed.
+> The rest of the features not expected stable.
 
 ## Architecture Overview
 
@@ -234,11 +234,7 @@ flowchart LR
 - **ZSTD** (for compression)
 - **fmt** (formatting library)
 - **CLI11** (CLI parsing, optional)
-- **Qt6** (GUI application, optional)
 - **GTest** (unit tests, optional)
-
-> [!Warning]
-> Qt6 GUI application is currently test stage. Do not enable `XSTD_APP` option until then.
 
 ### Build Commands
 
@@ -258,7 +254,6 @@ ctest --test-dir build/debug/tests
 | Option | Default | Description |
 |--------|---------|-------------|
 | `XSTD_CLI` | `ON` | Build the CLI tool (`xli`) |
-| `XSTD_APP` | `OFF` | Build the Qt6 GUI application |
 | `XSTD_TESTS` | `ON` | Build unit tests |
 
 ## CLI Usage
