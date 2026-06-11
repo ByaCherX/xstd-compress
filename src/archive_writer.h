@@ -77,18 +77,25 @@ public:
                                          std::size_t                file_count);
 
     /// Add a file from a memory buffer.
+    /// @param per_page_codec  Optional. If `raw == 0`, falls back to opts_.codec.
+    ///        When provided, every page of this file is written with that codec
+    ///        (used to preserve the original codec when rewriting an archive).
     [[nodiscard]] XSTD_Result AddFile(const std::string& filename,
-                                std::span<const uint8_t> data);
+                                std::span<const uint8_t> data,
+                                CompressionCodec         per_page_codec = {});
 
     /// Add a file from a std::vector (convenience overload).
     [[nodiscard]] XSTD_Result AddFile(const std::string& filename,
-                             const std::vector<uint8_t>& data) {
-        return AddFile(filename, std::span<const uint8_t>(data));
+                             const std::vector<uint8_t>& data,
+                             CompressionCodec             per_page_codec = {}) {
+        return AddFile(filename, std::span<const uint8_t>(data), per_page_codec);
     }
 
     /// Add a file from disk.
+    /// @param per_page_codec  Optional. See AddFile() for details.
     [[nodiscard]] XSTD_Result AddFileFromDisk(const std::filesystem::path& source,
-                                              const std::string&           filename);
+                                              const std::string&           filename,
+                                              CompressionCodec             per_page_codec = {});
 
     /// Delete a previously-added file.
     /// When soft_delete=true: marks each page header on disk as deleted and keeps the
