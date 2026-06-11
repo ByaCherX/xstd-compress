@@ -1,7 +1,11 @@
-# XSTD — Express Standart Archive Format
+# XSTD — Express Standart Archive Format 
 
-#### Status: 🔬 Experimental
+#### Status: ⚠️ Deprecated
 **XSTD** (`.xstd`) is a high-performance binary archive format designed for secure, compressed file storage. It combines ZSTD compression, AES-GCM/CTR encryption, SHA-256 integrity verification, and a B+ Tree-based file catalog into a single, page-oriented container.
+
+> [!Caution]
+> This project was developed experimentally, it does not have a stable API, and it is for learning purposes only. Do not create pull requests or new issues as the project is deprecated. 
+> **ALL RIGHTS OF USE ARE YOURS, NO LIABILITY IS ACCEPTED, YOU ARE RESPONSIBLE FOR ITS OPERATION.**
 
 ## Project Goals
 
