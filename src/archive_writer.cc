@@ -223,8 +223,11 @@ XSTD_Result ArchiveWriter::WriteCatalogAndFooter() {
 
 void ArchiveWriter::ValidateOptions() const {
     if (opts_.encryption.IsEncrypted()) {
-        if (opts_.key.size() < 8)
-            XSTD_THROW_ERROR_MSG(kInvalidArgument, "encryption key must be at least 8 bytes");
+        const std::size_t required = static_cast<std::size_t>(opts_.encryption.GetKeySize());
+        if (opts_.key.size() != required) {
+            XSTD_THROW_ERROR_MSG(kInvalidArgument,
+                "encryption key must be exactly " + std::to_string(required) + " bytes (actual size: " + std::to_string(opts_.key.size()) + ")");
+        }
         if (opts_.encryption.GetAlgorithm() == EncryptionAlgorithm::NONE)
             XSTD_THROW_ERROR_MSG(kInvalidArgument,
                 "encryption algorithm is NONE but the encrypted flag is set");
@@ -326,17 +329,7 @@ PageHeader ArchiveWriter::WritePage(std::span<const uint8_t> chunk,
     // 2. CRC of compressed plaintext.
     const uint64_t crc = XXHasher::Hash(compressed.data(), compressed.size());
 
-    // 3. Optionally encrypt.
-    std::vector<uint8_t> payload;
-    bool encrypted = false;
-    if (encryptor_) {
-        payload   = encryptor_->Encrypt(compressed, opts_.key);
-        encrypted = true;
-    } else {
-        payload = std::move(compressed);
-    }
-
-    // 4. Build PageHeader.
+    // 3. Build PageHeader and optionally encrypt.
     const int32_t write_offset = static_cast<int32_t>(IO().AppendPosition());
     PageHeader ph;
     ph.page_id           = AllocatePageId();
@@ -345,11 +338,22 @@ PageHeader ArchiveWriter::WritePage(std::span<const uint8_t> chunk,
     ph.encoding          = static_cast<uint8_t>(encoding);
     ph.compression_codec = effective_codec.raw;
     ph.uncompressed_size = static_cast<int32_t>(chunk.size());
-    ph.compressed_size   = static_cast<int32_t>(payload.size());
     ph.crc32             = static_cast<uint32_t>(crc & 0xFFFF'FFFF);
-    ph.SetEncrypted(encrypted);
 
-    // 5. Append header + payload.
+    std::vector<uint8_t> payload;
+    if (encryptor_) {
+        ph.compressed_size = static_cast<int32_t>(compressed.size() + encryptor_->IvSize() + encryptor_->TagSize());
+        ph.SetEncrypted(true);
+        // Authenticate the first 24 bytes of PageHeader (up to the iv field)
+        std::span<const uint8_t> aad{reinterpret_cast<const uint8_t*>(&ph), 24};
+        payload = encryptor_->Encrypt(compressed, opts_.key, aad);
+    } else {
+        ph.compressed_size = static_cast<int32_t>(compressed.size());
+        ph.SetEncrypted(false);
+        payload = std::move(compressed);
+    }
+
+    // 4. Append header + payload.
     const auto* ph_raw = reinterpret_cast<const uint8_t*>(&ph);
     if (auto io_result = IO().Append({ph_raw, sizeof(ph)});
             XSTD_isError(io_result))

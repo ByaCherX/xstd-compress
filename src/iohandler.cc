@@ -266,15 +266,27 @@ XSTD_Result IOHandler::Truncate(int64_t size)
 XSTD_Result IOHandler::Flush()
 {
 #ifdef _WIN32
-    if (map_view_)
-        FlushViewOfFile(map_view_, 0);
-    if (file_handle_ != INVALID_HANDLE_VALUE)
-        FlushFileBuffers(file_handle_);
+    if (map_view_) {
+        if (FlushViewOfFile(map_view_, 0) == 0) {
+            return XSTD_returnError(kIOError);
+        }
+    }
+    if (file_handle_ != INVALID_HANDLE_VALUE) {
+        if (FlushFileBuffers(file_handle_) == 0) {
+            return XSTD_returnError(kIOError);
+        }
+    }
 #else
-    if (map_view_ && map_view_ != MAP_FAILED && map_size_ > 0)
-        ::msync(map_view_, map_size_, MS_SYNC);
-    if (fd_ >= 0)
-        ::fdatasync(fd_);
+    if (map_view_ && map_view_ != MAP_FAILED && map_size_ > 0) {
+        if (::msync(map_view_, map_size_, MS_SYNC) != 0) {
+            return XSTD_returnError(kIOError);
+        }
+    }
+    if (fd_ >= 0) {
+        if (::fdatasync(fd_) != 0) {
+            return XSTD_returnError(kIOError);
+        }
+    }
 #endif
     return XSTD_returnSuccess();
 }

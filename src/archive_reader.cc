@@ -44,6 +44,9 @@ XSTD_Result ArchiveReader::Open() {
         if (header_.IsEncrypted()) {
             if (opts_.key.empty())
                 return XSTD_returnError(kMissingEncryptionKey);
+            const std::size_t required = static_cast<std::size_t>(header_.encryption.GetKeySize());
+            if (opts_.key.size() != required)
+                return XSTD_returnError(kInvalidArgument);
             encryptor_ = EncryptorFactory::Create(header_.encryption.GetAlgorithm());
             if (!encryptor_)
                 return XSTD_returnError(kUnsupportedAlgorithm);
@@ -169,6 +172,11 @@ void ArchiveReader::ReadAndValidateHeader() {
     std::memcpy(&header_, span.data(), sizeof(header_));
     if (header_.magic != kMagic)
         XSTD_THROW_ERROR_MSG(kInvalidArchive, "invalid magic number — not an Xstd archive");
+    if (header_.version < kMinReadVersion || header_.version > kCurrentVersion)
+        XSTD_THROW_ERROR_MSG(kArchiveVersionMismatch,
+            "archive version " + std::to_string(header_.version) +
+            " is not supported (supported range: " +
+            std::to_string(kMinReadVersion) + " to " + std::to_string(kCurrentVersion) + ")");
 }
 
 // ---------------------------------------------------------------------------
@@ -226,6 +234,10 @@ void ArchiveReader::ReadAndValidateCatalog() {
         XSTD_THROW_ERROR_MSG(kInvalidArchive,
             "invalid footer magic — archive may be truncated or corrupted");
 
+    if (footer.num_files < 0) {
+        XSTD_THROW_ERROR_MSG(kCatalogCorrupted, "negative file count in footer");
+    }
+
     // Read catalog bytes via memory-mapped view.
     if (footer.catalog_offset < 0 || footer.catalog_size <= 0)
         XSTD_THROW_ERROR_MSG(kCatalogCorrupted, "invalid catalog region in footer");
@@ -246,6 +258,18 @@ void ArchiveReader::ReadAndValidateCatalog() {
 
 const std::vector<uint8_t>& ArchiveReader::ReadPage(const PageHeader& ph)
 {
+    if (ph.offset < 0 || ph.compressed_size < 0 || ph.uncompressed_size < 0) {
+        XSTD_THROW_ERROR_MSG(kInvalidArchive,
+            "page_id=" + std::to_string(ph.page_id) + " has invalid negative values");
+    }
+
+    const std::size_t data_offset = static_cast<std::size_t>(ph.offset) + kPageHeaderSize;
+
+    if (data_offset + static_cast<std::size_t>(ph.compressed_size) > static_cast<std::size_t>(IO().FileSize())) {
+        XSTD_THROW_ERROR_MSG(kArchiveTruncated,
+            "page_id=" + std::to_string(ph.page_id) + " data range is out of file bounds");
+    }
+
     const CacheKey key = ph.page_id;
 
     // Cache hit — move to front and return.
@@ -256,8 +280,6 @@ const std::vector<uint8_t>& ArchiveReader::ReadPage(const PageHeader& ph)
     }
 
     // Cache miss — read from memory-mapped file (zero-copy).
-    const std::size_t data_offset =
-        static_cast<std::size_t>(ph.offset) + kPageHeaderSize;
     auto raw_span = IO().ReadAt(static_cast<int64_t>(data_offset),
                                 static_cast<std::size_t>(ph.compressed_size));
 
@@ -273,8 +295,10 @@ const std::vector<uint8_t>& ArchiveReader::ReadPage(const PageHeader& ph)
                 "no encryptor available for page_id=" + std::to_string(ph.page_id));
         // IEncryptor::Decrypt is stateless (IV is embedded in ciphertext)
         // so the shared encryptor_ is safe to call from multiple contexts.
+        // Authenticate the first 24 bytes of PageHeader (up to the iv field)
+        std::span<const uint8_t> aad{reinterpret_cast<const uint8_t*>(&ph), 24};
         plaintext = encryptor_->Decrypt(
-            {raw_span.data(), raw_span.size()}, opts_.key);
+            {raw_span.data(), raw_span.size()}, opts_.key, aad);
     } else {
         plaintext.assign(raw_span.begin(), raw_span.end());
     }

@@ -1,6 +1,7 @@
 #include "page_manager.h"
 #include "xstd_errors.h"
 
+#include <bit>
 #include <stdexcept>
 #include <string>
 
@@ -57,7 +58,7 @@ bool PageManager::IsAllocated(int32_t id) const noexcept {
 int32_t PageManager::AllocatedCount() const noexcept {
     int32_t count = 0;
     for (uint64_t w : bitmap_)
-        count += static_cast<int32_t>(__builtin_popcountll(w));
+        count += static_cast<int32_t>(std::popcount(w));
     return count;
 }
 
@@ -85,7 +86,7 @@ void PageManager::Deserialise(std::span<const uint8_t> data) {
     page_count_ = 0;
     for (int32_t i = static_cast<int32_t>(bitmap_.size()) - 1; i >= 0; --i) {
         if (bitmap_[i] != 0) {
-            int msb = 63 - __builtin_clzll(bitmap_[i]);
+            int msb = 63 - std::countl_zero(bitmap_[i]);
             page_count_ = static_cast<int32_t>(i) * 64 + msb + 1;
             break;
         }
@@ -103,7 +104,7 @@ void PageManager::EnsureCapacity(int32_t needed) {
 }
 
 int PageManager::CountTrailingOnes(uint64_t w) noexcept {
-    return __builtin_ctzll(~w);
+    return std::countr_zero(~w);
 }
 
 } // namespace xstd
