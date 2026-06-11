@@ -10,6 +10,7 @@
 #include "commands/info.h"
 #include "commands/list.h"
 #include "commands/recover.h"
+#include "commands/compress.h"
 
 int main(int argc, char** argv) {
     CLI::App app{"Xstd archive tool", "xli"};
@@ -28,6 +29,7 @@ int main(int argc, char** argv) {
     xstd::cli::RegisterDelete(app);
     xstd::cli::RegisterRecover(app);
     xstd::cli::RegisterInfo(app);
+    xstd::cli::RegisterCompress(app);
 
     try {
         app.parse(argc, argv);

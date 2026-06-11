@@ -34,34 +34,22 @@ void RegisterRecover(CLI::App& app) {
     sub->add_option("--key-file",       opts->key_file,    "Path to binary key file");
 
     sub->callback([opts]() {
-        std::vector<uint8_t> key_bytes;
-        try {
-            key_bytes = ResolveKey(opts->key_hex, opts->key_file);
-        } catch (const std::exception& e) {
-            fmt::print(stderr, "Error: {}\n", e.what());
-            std::exit(1);
-        }
+        std::vector<uint8_t> key_bytes = ResolveKey(opts->key_hex, opts->key_file);
 
         ArchiveOptions aopts;
         aopts.key = key_bytes;
 
         Archive arch(opts->archive, aopts);
-        if (auto res = arch.Open(); XSTD_isError(res)) {
-            HandleResult(res, "opening archive");
-            std::exit(1);
-        }
+        ThrowOnResult(arch.Open(), "opening archive");
 
         VLog("Recovering '{}' from '{}'", opts->target_path, opts->archive);
 
         auto recovered = arch.RecoverFile(opts->target_path);
         if (!recovered) {
-            fmt::print(stderr,
-                       "Error: '{}' could not be recovered (not found or not deleted).\n",
-                       opts->target_path);
-            std::exit(1);
+            throw std::runtime_error(fmt::format("Error: '{}' could not be recovered (not found or not deleted).", opts->target_path));
         }
 
-        (void)arch.Close();
+        ThrowOnResult(arch.Close(), "closing archive");
 
         // ---- Write recovered data to disk ----
         const std::filesystem::path out_dir =
@@ -73,8 +61,7 @@ void RegisterRecover(CLI::App& app) {
 
         std::ofstream out_file(dest, std::ios::binary);
         if (!out_file) {
-            fmt::print(stderr, "Error: cannot write to '{}'\n", dest.string());
-            std::exit(1);
+            throw std::runtime_error(fmt::format("Error: cannot write to '{}'", dest.string()));
         }
         out_file.write(reinterpret_cast<const char*>(recovered->data()),
                        static_cast<std::streamsize>(recovered->size()));

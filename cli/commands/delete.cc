@@ -31,35 +31,20 @@ void RegisterDelete(CLI::App& app) {
     sub->add_flag("--soft",         opts->soft,         "Soft-delete: mark as deleted but keep data recoverable");
 
     sub->callback([opts]() {
-        std::vector<uint8_t> key_bytes;
-        try {
-            key_bytes = ResolveKey(opts->key_hex, opts->key_file);
-        } catch (const std::exception& e) {
-            fmt::print(stderr, "Error: {}\n", e.what());
-            std::exit(1);
-        }
+        std::vector<uint8_t> key_bytes = ResolveKey(opts->key_hex, opts->key_file);
 
         ArchiveOptions aopts;
         aopts.key = key_bytes;
 
         Archive arch(opts->archive, aopts);
-        if (auto res = arch.Open(); XSTD_isError(res)) {
-            HandleResult(res, "opening archive");
-            std::exit(1);
-        }
+        ThrowOnResult(arch.Open(), "opening archive");
 
         VLog("Archive : {} ({} file(s))", opts->archive, arch.FileCount());
         VLog("Target  : {}", opts->target_path);
 
-        if (auto res = arch.DeleteFile(opts->target_path, opts->soft); XSTD_isError(res)) {
-            HandleResult(res, fmt::format("deleting '{}'", opts->target_path));
-            std::exit(1);
-        }
+        ThrowOnResult(arch.DeleteFile(opts->target_path, opts->soft), fmt::format("deleting '{}'", opts->target_path));
 
-        if (auto res = arch.Close(); XSTD_isError(res)) {
-            HandleResult(res, "closing archive");
-            std::exit(1);
-        }
+        ThrowOnResult(arch.Close(), "closing archive");
 
         if (opts->soft) {
             fmt::print("Soft-deleted '{}' from '{}'.\n", opts->target_path, opts->archive);

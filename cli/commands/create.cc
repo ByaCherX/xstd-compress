@@ -51,16 +51,7 @@ void RegisterCreate(CLI::App& app) {
 
     sub->callback([opts]() {
         // ---- Compression ----
-        CompressionType comp_type;
-        if (opts->compression_str == "none") {
-            comp_type = CompressionType::UNCOMPRESSED;
-        } else if (opts->compression_str == "zstd") {
-            comp_type = CompressionType::ZSTD;
-        } else {
-            fmt::print(stderr, "Error: unknown compression '{}'. Use 'none' or 'zstd'.\n",
-                       opts->compression_str);
-            std::exit(1);
-        }
+        const CompressionType comp_type = ParseCompressionType(opts->compression_str);
         const auto comp_level = static_cast<CompressionLevel>(opts->level);
 
         // ---- Encryption ----
@@ -68,37 +59,15 @@ void RegisterCreate(CLI::App& app) {
         std::vector<uint8_t> key_bytes;
 
         if (!opts->encrypt_str.empty()) {
-            EncryptionAlgorithm alg;
-            if (opts->encrypt_str == "aes-gcm") {
-                alg = EncryptionAlgorithm::AES_GCM_V1;
-            } else if (opts->encrypt_str == "aes-ctr") {
-                alg = EncryptionAlgorithm::AES_CTR_V1;
-            } else {
-                fmt::print(stderr,
-                           "Error: unknown encryption '{}'. Use 'aes-gcm' or 'aes-ctr'.\n",
-                           opts->encrypt_str);
-                std::exit(1);
-            }
-
-            AesKeySize ks = AesKeySize::AES_256;
-            if (opts->key_size_int == 128) ks = AesKeySize::AES_128;
-            else if (opts->key_size_int == 192) ks = AesKeySize::AES_192;
-
+            const EncryptionAlgorithm alg = ParseEncryptionAlgorithm(opts->encrypt_str);
+            const AesKeySize ks = MapKeySize(opts->key_size_int);
             enc = ArchiveEncryption::Make(alg, ks);
-
-            try {
-                key_bytes = ResolveKey(opts->key_hex, opts->key_file, /*require_key=*/true);
-            } catch (const std::exception& e) {
-                fmt::print(stderr, "Error: {}\n", e.what());
-                std::exit(1);
-            }
+            key_bytes = ResolveKey(opts->key_hex, opts->key_file, /*require_key=*/true);
         }
 
         // ---- Validate --archive-path with multiple files ----
         if (!opts->archive_path_override.empty() && opts->files.size() > 1) {
-            fmt::print(stderr,
-                       "Error: --archive-path can only be used with a single input file.\n");
-            std::exit(1);
+            throw std::runtime_error("--archive-path can only be used with a single input file.");
         }
 
         // ---- Build archive options ----
@@ -116,10 +85,7 @@ void RegisterCreate(CLI::App& app) {
 
         Archive arch(opts->archive, aopts);
 
-        if (auto res = arch.Create(); XSTD_isError(res)) {
-            HandleResult(res, "initialising archive");
-            std::exit(1);
-        }
+        ThrowOnResult(arch.Create(), "initialising archive");
 
         for (const auto& f : opts->files) {
             const std::filesystem::path disk_path(f);
@@ -129,16 +95,10 @@ void RegisterCreate(CLI::App& app) {
 
             VLog("  {} → {}", f, arc_path);
 
-            if (auto res = arch.AddFile(arc_path, disk_path); XSTD_isError(res)) {
-                HandleResult(res, fmt::format("adding '{}'", f));
-                std::exit(1);
-            }
+            ThrowOnResult(arch.AddFile(arc_path, disk_path), fmt::format("adding '{}'", f));
         }
 
-        if (auto res = arch.Close(); XSTD_isError(res)) {
-            HandleResult(res, "finalising archive");
-            std::exit(1);
-        }
+        ThrowOnResult(arch.Close(), "finalising archive");
 
         fmt::print("Created '{}' with {} file(s).\n", opts->archive, opts->files.size());
     });
