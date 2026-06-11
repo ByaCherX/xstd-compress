@@ -30,7 +30,7 @@ static int ToZstdLevel(CompressionLevel lvl) noexcept {
 }
 
 ZstdCompressor::ZstdCompressor(CompressionCodec codec) noexcept
-    : level_(ToZstdLevel(codec_.Level())) {
+    : level_(ToZstdLevel(codec.Level())) {
         this->codec_ = codec;
     }
 
@@ -77,10 +77,19 @@ XSTD_Result ZstdCompressor::Decompress(std::span<const uint8_t> input,
         return XSTD_returnSuccess();
     } else {
         // Unknown size — use streaming decompress.
-        ZSTD_DStream* stream = ZSTD_createDStream();
-        if (!stream) XSTD_returnError(kDecompressionFailed);
+        struct DStreamDeleter {
+            void operator()(ZSTD_DStream* s) const noexcept {
+                if (s) {
+                    ZSTD_freeDStream(s);
+                }
+            }
+        };
+        std::unique_ptr<ZSTD_DStream, DStreamDeleter> stream(ZSTD_createDStream());
+        if (!stream) {
+            return XSTD_returnError(kDecompressionFailed);
+        }
 
-        ZSTD_initDStream(stream);
+        ZSTD_initDStream(stream.get());
         output.clear();
 
         ZSTD_inBuffer  in_buf  {input.data(), input.size(), 0};
@@ -90,9 +99,8 @@ XSTD_Result ZstdCompressor::Decompress(std::span<const uint8_t> input,
         std::size_t ret = 0;
         do {
             out_buf.pos = 0;
-            ret = ZSTD_decompressStream(stream, &out_buf, &in_buf);
+            ret = ZSTD_decompressStream(stream.get(), &out_buf, &in_buf);
             if (ZSTD_isError(ret)) {
-                ZSTD_freeDStream(stream);
                 #ifdef XSTD_ENABLE_DIRECT_THROW
                 XSTD_THROW_ERROR_MSG(kGENERIC,
                     std::string("ZSTD decompress error: ") + ZSTD_getErrorName(ret));
@@ -102,7 +110,6 @@ XSTD_Result ZstdCompressor::Decompress(std::span<const uint8_t> input,
             output.insert(output.end(), chunk.begin(), chunk.begin() + out_buf.pos);
         } while (ret != 0 && in_buf.pos < in_buf.size);
 
-        ZSTD_freeDStream(stream);
         return XSTD_returnSuccess();
     }
 }
