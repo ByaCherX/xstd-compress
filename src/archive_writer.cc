@@ -99,7 +99,8 @@ XSTD_Result ArchiveWriter::InitAppend(std::shared_ptr<IOHandler> io,
 // ---------------------------------------------------------------------------
 
 XSTD_Result ArchiveWriter::AddFile(const std::string&       filename,
-                                   std::span<const uint8_t> data)
+                                   std::span<const uint8_t> data,
+                                   CompressionCodec         per_page_codec)
 {
     if (finalised_)
         return XSTD_returnError(kAlreadyFinalised);
@@ -128,8 +129,10 @@ XSTD_Result ArchiveWriter::AddFile(const std::string&       filename,
                 page_bytes, data.size() - offset);
             std::span<const uint8_t> chunk(data.data() + offset, chunk_size);
 
-            // Using default compressor for the page; override with per_page_codec if needed.
-            PageHeader ph = WritePage(chunk);
+            // Pass per_page_codec through so each file can keep its own
+            // compression codec (e.g. when rewriting a heterogeneous archive).
+            PageHeader ph = WritePage(chunk, PageType::DATA_PAGE, Encoding::PLAIN,
+                                      per_page_codec);
             meta.pages.push_back(ph);
 
             offset += chunk_size;
@@ -148,7 +151,8 @@ XSTD_Result ArchiveWriter::AddFile(const std::string&       filename,
 // ---------------------------------------------------------------------------
 
 XSTD_Result ArchiveWriter::AddFileFromDisk(const std::filesystem::path& source,
-                                           const std::string&           filename)
+                                           const std::string&           filename,
+                                           CompressionCodec             per_page_codec)
 {
     std::ifstream f(source, std::ios::binary);
     if (!f.is_open())
@@ -157,7 +161,7 @@ XSTD_Result ArchiveWriter::AddFileFromDisk(const std::filesystem::path& source,
     std::vector<uint8_t> data(
         (std::istreambuf_iterator<char>(f)),
         std::istreambuf_iterator<char>());
-    return AddFile(filename, data);
+    return AddFile(filename, data, per_page_codec);
 }
 
 // ---------------------------------------------------------------------------

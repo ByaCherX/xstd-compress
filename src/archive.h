@@ -108,16 +108,24 @@ public:
     // -----------------------------------------------------------------------
 
     /// Add a file from memory.
+    /// @param preserved_codec  Optional codec to use for this file's pages.
+    ///        Pass the file's original codec when rewriting an archive so
+    ///        existing files keep their existing compression.  An empty
+    ///        (raw==0) value falls back to opts_.codec.
     [[nodiscard]] XSTD_Result AddFile(const std::string& dest_path,
-                                std::span<const uint8_t> data);
+                                std::span<const uint8_t> data,
+                                CompressionCodec         preserved_codec = {});
     [[nodiscard]] XSTD_Result AddFile(const std::string& dest_path,
-                             const std::vector<uint8_t>& data) {
-        return AddFile(dest_path, std::span<const uint8_t>(data));
+                             const std::vector<uint8_t>& data,
+                             CompressionCodec             preserved_codec = {}) {
+        return AddFile(dest_path, std::span<const uint8_t>(data), preserved_codec);
     }
 
     /// Add a file from disk.  Overload of AddFile (replaces AddFileFromDisk).
+    /// @param preserved_codec  See AddFile(memory) overload for details.
     [[nodiscard]] XSTD_Result AddFile(const std::string& dest_path,
-                            const std::filesystem::path& source);
+                            const std::filesystem::path& source,
+                            CompressionCodec             preserved_codec = {});
 
     /// Delete a file from the archive.
     /// When soft_delete=false (default): zeroes page data on disk and removes the

@@ -182,11 +182,12 @@ XSTD_Result Archive::Close() {
 // ---------------------------------------------------------------------------
 
 XSTD_Result Archive::AddFile(const std::string&       dest_path,
-                             std::span<const uint8_t> data)
+                             std::span<const uint8_t> data,
+                             CompressionCodec         preserved_codec)
 {
     // Fast path: we are in create mode, write directly.
     if (created_ && writer_)
-        return writer_->AddFile(dest_path, data);
+        return writer_->AddFile(dest_path, data, preserved_codec);
 
     if (!opened_ || !reader_)
         return XSTD_returnError(kInvalidArgument);
@@ -194,7 +195,7 @@ XSTD_Result Archive::AddFile(const std::string&       dest_path,
     // ReadWrite fast path: append pages in-place, then commit catalog.
     if (IsReadWrite()) {
         shared_io_->SetAppendPosition(catalog_offset_);
-        if (auto r = writer_->AddFile(dest_path, data); XSTD_isError(r))
+        if (auto r = writer_->AddFile(dest_path, data, preserved_codec); XSTD_isError(r))
             return r;
         return CommitCatalog();
     }
@@ -207,9 +208,16 @@ XSTD_Result Archive::AddFile(const std::string&       dest_path,
         for (const auto& f : r.ListFiles()) {
             std::vector<uint8_t> buf;
             if (auto e = r.ExtractFile(f, buf); XSTD_isError(e)) return e;
-            if (auto e = w.AddFile(f, buf);      XSTD_isError(e)) return e;
+            // Preserve the original codec for each existing file so the rewrite
+            // does not silently change their compression.
+            CompressionCodec orig_codec;
+            if (auto meta = r.Stat(f); meta && !meta->pages.empty()) {
+                orig_codec = meta->pages.front().Codec();
+            }
+            if (auto e = w.AddFile(f, buf, orig_codec); XSTD_isError(e)) return e;
         }
-        return w.AddFile(path_copy, data_copy);
+        // Newly added file uses the caller-supplied codec (defaults to writer codec).
+        return w.AddFile(path_copy, data_copy, preserved_codec);
     });
 }
 
@@ -218,17 +226,19 @@ XSTD_Result Archive::AddFile(const std::string&       dest_path,
 // ---------------------------------------------------------------------------
 
 XSTD_Result Archive::AddFile(const std::string&           dest_path,
-                             const std::filesystem::path& source)
+                             const std::filesystem::path& source,
+                             CompressionCodec             preserved_codec)
 {
     if (created_ && writer_)
-        return writer_->AddFileFromDisk(source, dest_path);
+        return writer_->AddFileFromDisk(source, dest_path, preserved_codec);
 
     if (!opened_ || !reader_)
         return XSTD_returnError(kInvalidArgument);
 
     if (IsReadWrite()) {
         shared_io_->SetAppendPosition(catalog_offset_);
-        if (auto r = writer_->AddFileFromDisk(source, dest_path); XSTD_isError(r))
+        if (auto r = writer_->AddFileFromDisk(source, dest_path, preserved_codec);
+            XSTD_isError(r))
             return r;
         return CommitCatalog();
     }
@@ -240,9 +250,19 @@ XSTD_Result Archive::AddFile(const std::string&           dest_path,
         for (const auto& f : r.ListFiles()) {
             std::vector<uint8_t> buf;
             if (auto e = r.ExtractFile(f, buf); XSTD_isError(e)) return e;
-            if (auto e = w.AddFile(f, buf);      XSTD_isError(e)) return e;
+            // Preserve the original codec for each existing file so the rewrite
+            // does not silently change their compression. If the file has no
+            // pages (shouldn't happen) we leave per_page_codec empty, which
+            // means "use the writer's default codec".
+            CompressionCodec orig_codec;
+            if (auto meta = r.Stat(f); meta && !meta->pages.empty()) {
+                orig_codec = meta->pages.front().Codec();
+            }
+            if (auto e = w.AddFile(f, buf, orig_codec); XSTD_isError(e)) return e;
         }
-        return w.AddFileFromDisk(source_copy, path_copy);
+        // The newly added file uses the caller-supplied codec (e.g. CLI's
+        // --compression 'none'); pass it through to the writer.
+        return w.AddFileFromDisk(source_copy, path_copy, preserved_codec);
     });
 }
 

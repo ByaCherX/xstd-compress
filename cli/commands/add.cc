@@ -39,25 +39,14 @@ void RegisterAdd(CLI::App& app) {
     sub->add_option("--key-file",       opts->key_file, "Path to binary key file");
 
     sub->callback([opts]() {
-        std::vector<uint8_t> key_bytes;
-        try {
-            key_bytes = ResolveKey(opts->key_hex, opts->key_file);
-        } catch (const std::exception& e) {
-            fmt::print(stderr, "Error: {}\n", e.what());
-            std::exit(1);
+        // Early validation: ensure disk path exists before passing to Archive!
+        const std::filesystem::path disk_path(opts->file);
+        if (!std::filesystem::exists(disk_path)) {
+            throw std::runtime_error(fmt::format("Error: input file '{}' does not exist.", opts->file));
         }
 
-        // ---- Resolve compression ----
-        CompressionType comp_type;
-        if (opts->compression_str == "none") {
-            comp_type = CompressionType::UNCOMPRESSED;
-        } else if (opts->compression_str == "zstd") {
-            comp_type = CompressionType::ZSTD;
-        } else {
-            fmt::print(stderr, "Error: unknown compression '{}'.  Use 'none' or 'zstd'.\n",
-                       opts->compression_str);
-            std::exit(1);
-        }
+        std::vector<uint8_t> key_bytes = ResolveKey(opts->key_hex, opts->key_file);
+        const CompressionType comp_type = ParseCompressionType(opts->compression_str);
 
         // ---- Open archive and add file via high-level API ----
         ArchiveOptions aopts;
@@ -66,29 +55,19 @@ void RegisterAdd(CLI::App& app) {
                                        static_cast<CompressionLevel>(opts->level)};
 
         Archive arch(opts->archive, aopts);
-        if (auto res = arch.Open(); XSTD_isError(res)) {
-            HandleResult(res, "opening archive");
-            std::exit(1);
-        }
+        ThrowOnResult(arch.Open(), "opening archive");
 
         VLog("Archive: {} ({} file(s))", opts->archive, arch.FileCount());
 
-        const std::filesystem::path disk_path(opts->file);
         const std::string arc_path = opts->archive_path_override.empty()
             ? disk_path.filename().string()
             : opts->archive_path_override;
 
         VLog("  Adding: {} \u2192 {}", opts->file, arc_path);
 
-        if (auto res = arch.AddFile(arc_path, disk_path); XSTD_isError(res)) {
-            HandleResult(res, fmt::format("adding '{}'", opts->file));
-            std::exit(1);
-        }
+        ThrowOnResult(arch.AddFile(arc_path, disk_path), fmt::format("adding '{}'", opts->file));
 
-        if (auto res = arch.Close(); XSTD_isError(res)) {
-            HandleResult(res, "closing archive");
-            std::exit(1);
-        }
+        ThrowOnResult(arch.Close(), "closing archive");
 
         fmt::print("Added '{}' as '{}' in '{}'.\n", opts->file, arc_path, opts->archive);
     });
