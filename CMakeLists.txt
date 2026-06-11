@@ -3,13 +3,6 @@
 cmake_minimum_required(VERSION 3.28)
 message(STATUS "CMake version: ${CMAKE_VERSION}")
 
-# ----- XSTD GUI Application (optional)
-option(XSTD_APP "Optional GUI application using Qt6" OFF)
-if (XSTD_APP)
-    list(APPEND VCPKG_MANIFEST_FEATURES "gui")
-endif()
-# ---------------------------------------------
-
 project(Xstd LANGUAGES CXX)
 
 # ----- C++ standard
@@ -106,10 +99,4 @@ option(XSTD_CLI "Include CLI application" ON)
 if (XSTD_CLI)
     message(STATUS "XSTD CLI enabled")
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cli)
-endif()
-
-# ------ GUI application (optional, requires Qt6)
-if (XSTD_APP)
-    message(STATUS "XSTD GUI application enabled")
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/app)
 endif()
