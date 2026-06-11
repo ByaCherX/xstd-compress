@@ -8,6 +8,7 @@
 
 #include <fmt/core.h>
 
+#include "types.h"
 #include "xstd_errors.h"
 
 namespace xstd::cli {
@@ -70,5 +71,15 @@ std::string ToHex(const uint8_t* data, size_t len);
 /// Print a human-readable error from an XSTD_Result to stderr and return 1.
 /// Returns 0 if res is success.
 int HandleResult(XSTD_Result res, std::string_view context);
+
+/// Throws std::runtime_error with a formatted message if res is an error.
+void ThrowOnResult(XSTD_Result res, std::string_view context);
+
+// ---------------------------------------------------------------------------
+// Unified Compression & Encryption Parsing Helpers
+// ---------------------------------------------------------------------------
+CompressionType ParseCompressionType(std::string_view comp_str);
+EncryptionAlgorithm ParseEncryptionAlgorithm(std::string_view enc_str);
+AesKeySize MapKeySize(int key_size_bits);
 
 } // namespace xstd::cli

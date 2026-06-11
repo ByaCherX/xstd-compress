@@ -10,6 +10,7 @@ set(CLI_SOURCES
     ${CLI_SRC_DIR}/commands/delete.cc
     ${CLI_SRC_DIR}/commands/recover.cc
     ${CLI_SRC_DIR}/commands/info.cc
+    ${CLI_SRC_DIR}/commands/compress.cc
 )
 
 add_executable(xli ${CLI_SOURCES})

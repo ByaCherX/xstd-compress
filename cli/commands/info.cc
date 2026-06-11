@@ -50,22 +50,13 @@ void RegisterInfo(CLI::App& app) {
     sub->add_option("--key-file",   opts->key_file, "Path to binary key file");
 
     sub->callback([opts]() {
-        std::vector<uint8_t> key_bytes;
-        try {
-            key_bytes = ResolveKey(opts->key_hex, opts->key_file);
-        } catch (const std::exception& e) {
-            fmt::print(stderr, "Error: {}\n", e.what());
-            std::exit(1);
-        }
+        std::vector<uint8_t> key_bytes = ResolveKey(opts->key_hex, opts->key_file);
 
         ArchiveOptions aopts;
         aopts.key = key_bytes;
 
         Archive arch(opts->archive, aopts);
-        if (auto res = arch.Open(); XSTD_isError(res)) {
-            HandleResult(res, "opening archive");
-            std::exit(1);
-        }
+        ThrowOnResult(arch.Open(), "opening archive");
 
         const auto& hdr        = arch.Header();
         const auto  file_count = arch.FileCount();

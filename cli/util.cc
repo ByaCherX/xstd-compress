@@ -131,4 +131,37 @@ int HandleResult(XSTD_Result res, std::string_view context) {
     return 1;
 }
 
+void ThrowOnResult(XSTD_Result res, std::string_view context) {
+    if (XSTD_isError(res)) {
+         throw std::runtime_error(fmt::format("Error {}: {}", context, XSTD_ErrorCode_toString(res)));
+    }
+}
+
+CompressionType ParseCompressionType(std::string_view comp_str) {
+    if (comp_str == "none") {
+        return CompressionType::UNCOMPRESSED;
+    } else if (comp_str == "zstd") {
+        return CompressionType::ZSTD;
+    } else {
+        throw std::runtime_error(fmt::format("invalid compression type '{}'. Use 'none' or 'zstd'.", comp_str));
+    }
+}
+
+EncryptionAlgorithm ParseEncryptionAlgorithm(std::string_view enc_str) {
+    if (enc_str == "aes-gcm") {
+        return EncryptionAlgorithm::AES_GCM_V1;
+    } else if (enc_str == "aes-ctr") {
+        return EncryptionAlgorithm::AES_CTR_V1;
+    } else {
+        throw std::runtime_error(fmt::format("invalid encryption algorithm '{}'. Use 'aes-gcm' or 'aes-ctr'.", enc_str));
+    }
+}
+
+AesKeySize MapKeySize(int key_size_bits) {
+    if (key_size_bits == 128) return AesKeySize::AES_128;
+    if (key_size_bits == 192) return AesKeySize::AES_192;
+    if (key_size_bits == 256) return AesKeySize::AES_256;
+    throw std::runtime_error(fmt::format("invalid key size: {} bits. Use 128, 192, or 256.", key_size_bits));
+}
+
 } // namespace xstd::cli
